@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Antiwispr</string>
+    <string name="accessibility_label">Antiwispr</string>
+    <string name="accessibility_desc">Feasibility skeleton: reads WhatsApp voice-note bubble nodes (duration, timestamp, play control) to drive internal-audio capture and transcription. Personal sideloaded test app.</string>
+</resources>

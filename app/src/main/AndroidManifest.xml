@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Capture the speaker-played voice note via the mic.
+         RECORD_AUDIO is also required to build ANY AudioRecord, including the
+         internal-audio (AudioPlaybackCapture) path. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- All-files access so we can read WhatsApp's .opus voice notes (Android 11+). -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
+    <!-- Internal audio capture (MediaProjection + AudioPlaybackCapture) must run from a
+         foreground service. FOREGROUND_SERVICE has existed since API 28; the typed
+         permission FOREGROUND_SERVICE_MEDIA_PROJECTION is new in API 34 and is enforced
+         when targetSdk >= 34 (we target 36). POST_NOTIFICATIONS (API 33+) only makes the
+         mandatory FGS notification visible — capture works without it. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Floating result card + scrollable debug dump drawn over WhatsApp. Granted via a
+         Settings screen (not a runtime dialog); checked with Settings.canDrawOverlays(). -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <uses-feature android:name="android.hardware.microphone" android:required="true" />
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Antiwispr">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Internal-audio capture (MediaProjection + AudioPlaybackCapture) owns a
+             mediaProjection-typed foreground service. On Android 14+ the system requires the
+             FGS (with this exact type) to be running BEFORE getMediaProjection() is called. -->
+        <service
+            android:name=".ProjectionService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!-- Accessibility service, scoped to com.whatsapp via the config below. The
+             android:permission=BIND_ACCESSIBILITY_SERVICE is what the OS requires so only the
+             system can bind it; the user must still enable it manually in Settings. -->
+        <service
+            android:name=".WhatsAppAccessibilityService"
+            android:exported="false"
+            android:label="@string/accessibility_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+    </application>
+
+</manifest>
