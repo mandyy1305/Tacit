@@ -1,56 +1,49 @@
 package com.example.antiwispr
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
-import android.graphics.Color
-import android.graphics.PixelFormat
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.view.Gravity
-import android.view.MotionEvent
-import android.view.View
-import android.view.ViewGroup
-import android.view.WindowManager
-import android.widget.LinearLayout
-import android.widget.ProgressBar
-import android.widget.TextView
-import kotlin.math.roundToInt
+import androidx.compose.runtime.mutableStateOf
+import com.example.antiwispr.ui.overlay.OverlayComposeWindow
+import com.example.antiwispr.ui.overlay.OverlayPhase
+import com.example.antiwispr.ui.overlay.OverlayUiState
+import com.example.antiwispr.ui.overlay.TacitOverlayCard
+import com.example.antiwispr.ui.overlay.TacitOverlayTheme
+import com.example.antiwispr.ui.overlay.humanizeNotice
+import com.example.antiwispr.ui.overlay.interpretStatus
+import com.example.antiwispr.ui.overlay.toMatchInfo
 
 /**
- * Manages the SYSTEM_ALERT_WINDOW overlays:
- *  - a floating RESULT CARD (spinner -> duration/timestamp + candidate list + transcript),
- *    dismissable by tap-away (ACTION_OUTSIDE) or its ✕.
- *  - a scrollable DEBUG DUMP overlay that accumulates accessibility node dumps.
+ * The floating result card over WhatsApp — TACIT's hero UI. Public API is frozen (Orchestrator
+ * and the accessibility service call it from any thread); rendering is Compose inside a
+ * WindowManager window (see ui/overlay/). One immutable [OverlayUiState] in a single
+ * mutableStateOf drives everything — no partial frames.
  *
- * All window operations are marshalled to the main thread, so any component can call from
- * any thread. If overlay permission isn't granted, calls log and no-op.
+ * Semantics preserved from the View version:
+ *  - tap-away dismisses only while listening (sticky=false); results are sticky (✕ only).
+ *  - [dismissed] blocks a still-running listen from resurrecting the card.
+ *  - dismiss() fires [onDismiss] synchronously (Orchestrator's cancel must not wait for the
+ *    exit animation); only the physical removeView is deferred to the transition end, with a
+ *    hard fallback in case the animation never reports.
  */
 class OverlayController(private val ctx: Context) {
 
-    private val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val main = Handler(Looper.getMainLooper())
-    private val density = ctx.resources.displayMetrics.density
+    private var window: OverlayComposeWindow? = null
+    private val state = mutableStateOf(OverlayUiState())
 
-    // result card
-    private var card: View? = null
-    private var spinner: ProgressBar? = null
-    private var infoTv: TextView? = null
-    private var candTv: TextView? = null
-    private var transcriptTv: TextView? = null
-    private var bannerRow: LinearLayout? = null
-    private var bannerText: TextView? = null
     @Volatile private var onShareAction: (() -> Unit)? = null
     /** Invoked when the user dismisses the card (tap-away / ✕). Orchestrator uses it to cancel a listen. */
     @Volatile var onDismiss: (() -> Unit)? = null
     /** True once the user dismissed the card; blocks a still-running listen from re-creating it. */
     @Volatile private var dismissed = false
-    /** When a result is showing, ignore outside-touch dismissal (incl. our own pause-on-match click);
-     *  only the ✕ or a new play-tap closes it. */
+    /** When a result is showing, ignore outside-touch dismissal (incl. our own pause-on-match click). */
     @Volatile private var sticky = false
 
-    private fun dp(v: Int) = (v * density).roundToInt()
+    private var removeFallback: Runnable? = null
 
     private fun canDraw(): Boolean {
         val ok = Settings.canDrawOverlays(ctx)
@@ -62,171 +55,114 @@ class OverlayController(private val ctx: Context) {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post(block)
     }
 
-    // ---- result card ------------------------------------------------------------
+    // ---- public API (frozen) ------------------------------------------------------
 
     fun showSpinner(message: String) = onMain {
         if (!canDraw()) return@onMain
         dismissed = false // new listen session — allow the card again
-        sticky = false    // spinner/listening is dismissable by tapping away
-        if (card == null) buildCard()
-        spinner?.visibility = View.VISIBLE
-        bannerRow?.visibility = View.GONE // default hidden; mic path re-shows it
-        infoTv?.text = message
-        candTv?.text = "candidates: …"
-        transcriptTv?.text = "transcript: …"
+        sticky = false    // listening is dismissable by tapping away
+        cancelRemoveFallback()
+        ensureWindow()
+        state.value = OverlayUiState(visible = true, phase = OverlayPhase.LISTENING, statusLine = message)
         AppLog.i("[overlay] showing result card: \"$message\"")
     }
 
     /** Warn that we're on the mic fallback (no screen share) and offer a Share-screen button. */
     fun showMicFallbackBanner(onShare: () -> Unit) = onMain {
         if (!canDraw() || dismissed) return@onMain
-        if (card == null) buildCard()
+        ensureWindow()
         onShareAction = onShare
-        bannerText?.text = "⚠ Screen not shared — using mic (lower accuracy)."
-        bannerRow?.visibility = View.VISIBLE
+        state.value = state.value.copy(visible = true, micBanner = true)
     }
 
-    fun clearBanner() = onMain { bannerRow?.visibility = View.GONE }
-
-    fun setInfo(durationSec: Double?, timestamp: String?) = onMain {
-        val d = durationSec?.let { "%.0fs".format(it) } ?: "?"
-        infoTv?.text = "duration=$d   timestamp=${timestamp ?: "?"}"
+    fun clearBanner() = onMain {
+        state.value = state.value.copy(micBanner = false)
     }
 
-    /** Live one-line status during continuous listening (keeps the spinner spinning). */
+    fun setInfo(durationSec: Double?, timestamp: String?) {
+        // API kept for Orchestrator; the card deliberately shows neither value.
+    }
+
+    /** Live one-line status during continuous listening. */
     fun setStatus(text: String) = onMain {
-        if (!canDraw() || dismissed) return@onMain // don't resurrect a card the user dismissed mid-listen
-        if (card == null) buildCard()
-        spinner?.visibility = View.VISIBLE
-        candTv?.text = text
+        if (!canDraw() || dismissed) return@onMain // never resurrect a card the user dismissed mid-listen
+        ensureWindow()
+        val info = interpretStatus(text)
+        state.value = state.value.copy(
+            visible = true,
+            phase = OverlayPhase.LISTENING,
+            statusLine = info.line,
+            statusWarn = info.warn,
+        )
     }
 
     fun setCandidates(candidates: List<CandidateFile>, confident: Boolean) = onMain {
-        spinner?.visibility = View.GONE
-        sticky = true // a result is showing — outside touches (incl. the pause click) must not dismiss it
-        if (candidates.isEmpty()) { candTv?.text = "match: (no candidates)"; return@onMain }
-        val verdict = if (confident) "✅ match" else "⚠ uncertain"
-        val header = "$verdict — compared ${candidates.size} candidate(s) (fp hits):"
-        candTv?.text = header + "\n" + candidates.take(6).mapIndexed { i, c ->
-            val sc = if (c.score.isNaN()) "?" else "%.0f".format(c.score)
-            "${if (i == 0) "▶" else "•"} ${c.name}  $sc  (%.0fs)".format(c.durationSec)
-        }.joinToString("\n")
+        sticky = true // result showing — outside touches (incl. the pause click) must not dismiss it
+        state.value = state.value.copy(
+            phase = if (confident) OverlayPhase.MATCHED else OverlayPhase.NO_MATCH,
+            match = candidates.firstOrNull()?.toMatchInfo(),
+        )
     }
 
     fun setTranscript(text: String) = onMain {
-        spinner?.visibility = View.GONE
-        transcriptTv?.text = "transcript (STUB):\n$text"
+        state.value = when {
+            text.startsWith("transcribing") -> state.value.copy(phase = OverlayPhase.TRANSCRIBING)
+            text.startsWith("[") -> state.value.copy(phase = OverlayPhase.NOTICE, notice = humanizeNotice(text))
+            else -> state.value.copy(phase = OverlayPhase.TRANSCRIPT, transcript = text, copied = false)
+        }
     }
 
     fun dismiss() = onMain {
         dismissed = true
         sticky = false
-        card?.let { try { wm.removeView(it) } catch (_: Exception) {} }
-        card = null
+        state.value = state.value.copy(visible = false) // plays the exit transition
         AppLog.i("[overlay] result card dismissed.")
-        onDismiss?.invoke() // cancels an in-progress listen so it doesn't re-render the card
+        onDismiss?.invoke() // synchronous — cancels an in-progress listen immediately
+        scheduleRemoveFallback()
     }
 
-    private fun buildCard() {
-        val pad = dp(14)
-        val root = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad, pad, pad)
-            background = GradientDrawable().apply {
-                cornerRadius = dp(14).toFloat()
-                setColor(0xF21E1E22.toInt())
-                setStroke(dp(1), 0xFF3A3A40.toInt())
+    // ---- internals ------------------------------------------------------------------
+
+    private fun ensureWindow() {
+        val w = window ?: OverlayComposeWindow(ctx) { if (!sticky) dismiss() }.also { window = it }
+        if (!w.isShowing) {
+            w.show {
+                TacitOverlayTheme {
+                    TacitOverlayCard(
+                        state = state.value,
+                        onClose = { dismiss() },
+                        onShare = { onShareAction?.invoke() },
+                        onCopy = { copyTranscript() },
+                        onExitFinished = { removeWindow() },
+                    )
+                }
             }
         }
-
-        val header = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
-        header.addView(TextView(ctx).apply {
-            text = "Voice note"
-            setTextColor(Color.WHITE)
-            setTypeface(typeface, Typeface.BOLD)
-            textSize = 15f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        })
-        header.addView(TextView(ctx).apply {
-            text = "  ✕  "
-            setTextColor(Color.WHITE)
-            textSize = 16f
-            setOnClickListener { dismiss() }
-        })
-        root.addView(header)
-
-        // Mic-fallback warning banner + Share-screen button (hidden unless on the mic path).
-        val banner = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            visibility = View.GONE
-            setPadding(0, dp(6), 0, dp(6))
-        }
-        val bt = TextView(ctx).apply {
-            text = "⚠ Screen not shared — using mic (lower accuracy)."
-            setTextColor(0xFFFFC107.toInt())
-            textSize = 12f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val shareBtn = TextView(ctx).apply {
-            text = " Share screen "
-            setTextColor(Color.WHITE)
-            setTypeface(typeface, Typeface.BOLD)
-            textSize = 12f
-            background = GradientDrawable().apply { cornerRadius = dp(8).toFloat(); setColor(0xFF2E7D32.toInt()) }
-            setPadding(dp(8), dp(6), dp(8), dp(6))
-            setOnClickListener { onShareAction?.invoke() }
-        }
-        banner.addView(bt)
-        banner.addView(shareBtn)
-        root.addView(banner)
-        bannerRow = banner
-        bannerText = bt
-
-        spinner = ProgressBar(ctx).apply {
-            isIndeterminate = true
-            val lp = LinearLayout.LayoutParams(dp(28), dp(28))
-            lp.topMargin = dp(8); lp.bottomMargin = dp(8)
-            layoutParams = lp
-        }
-        root.addView(spinner)
-
-        infoTv = textRow("Reading voice note…")
-        root.addView(infoTv)
-        candTv = textRow("candidates: …")
-        root.addView(candTv)
-        transcriptTv = textRow("transcript: …")
-        root.addView(transcriptTv)
-
-        val lp = WindowManager.LayoutParams(
-            minOf(dp(340), (ctx.resources.displayMetrics.widthPixels * 0.9).toInt()),
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            y = dp(90)
-        }
-        // tap-away to dismiss
-        root.setOnTouchListener { _, ev ->
-            // Tap-away dismisses only while listening; once a result is shown the card is sticky
-            // (so our pause-on-match click — which lands outside the overlay — can't nuke it).
-            if (ev.action == MotionEvent.ACTION_OUTSIDE) { if (!sticky) dismiss(); true } else false
-        }
-        try {
-            wm.addView(root, lp)
-            card = root
-        } catch (e: Exception) {
-            AppLog.e("[overlay] addView(card) failed: ${e.message}", e)
-        }
     }
 
-    private fun textRow(initial: String) = TextView(ctx).apply {
-        text = initial
-        setTextColor(0xFFE6E6E6.toInt())
-        textSize = 13f
-        setPadding(0, dp(4), 0, dp(4))
+    private fun removeWindow() = onMain {
+        cancelRemoveFallback()
+        window?.remove()
+    }
+
+    /** Hard fallback: remove the window even if the exit transition never reports back. */
+    private fun scheduleRemoveFallback() {
+        cancelRemoveFallback()
+        val r = Runnable { if (dismissed) window?.remove() }
+        removeFallback = r
+        main.postDelayed(r, 350)
+    }
+
+    private fun cancelRemoveFallback() {
+        removeFallback?.let { main.removeCallbacks(it) }
+        removeFallback = null
+    }
+
+    private fun copyTranscript() {
+        val text = state.value.transcript ?: return
+        ctx.getSystemService(ClipboardManager::class.java)
+            ?.setPrimaryClip(ClipData.newPlainText("Tacit transcript", text))
+        state.value = state.value.copy(copied = true)
+        main.postDelayed({ state.value = state.value.copy(copied = false) }, 1500)
     }
 }

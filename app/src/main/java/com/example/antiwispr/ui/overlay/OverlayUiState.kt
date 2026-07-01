@@ -1,0 +1,66 @@
+package com.example.antiwispr.ui.overlay
+
+import com.example.antiwispr.CandidateFile
+import com.example.antiwispr.VoiceNotes
+import com.example.antiwispr.ui.components.durationLabel
+import com.example.antiwispr.ui.components.waDateLabel
+
+enum class OverlayPhase { LISTENING, MATCHED, TRANSCRIBING, TRANSCRIPT, NO_MATCH, NOTICE }
+
+/** Human-facing description of the matched note: "30 Jun · 0:42" (or "Voice note"). */
+data class MatchInfo(val meta: String)
+
+/** The whole overlay renders from this one immutable value (single mutableStateOf). */
+data class OverlayUiState(
+    val visible: Boolean = false,
+    val phase: OverlayPhase = OverlayPhase.LISTENING,
+    val micBanner: Boolean = false,
+    val statusLine: String = "Listening…",
+    val statusWarn: Boolean = false,
+    val match: MatchInfo? = null,        // survives MATCHED → TRANSCRIBING → TRANSCRIPT
+    val transcript: String? = null,
+    val notice: String? = null,          // humanized bracket-message ("[no confident match …]")
+    val copied: Boolean = false,
+)
+
+internal data class StatusInfo(val line: String, val warn: Boolean = false)
+
+// Formats pinned against Orchestrator.kt's setStatus call sites — keep in sync.
+private val LISTEN_RX = Regex("""^listening [\d.]+s""")
+
+/**
+ * Prettifies Orchestrator's raw status strings so Orchestrator itself needs zero changes.
+ * All "listening …" ticks collapse to a constant line — the equalizer animation carries
+ * the liveness; no seconds counter, no leading-file readout.
+ */
+internal fun interpretStatus(raw: String): StatusInfo = when {
+    LISTEN_RX.containsMatchIn(raw) -> StatusInfo(line = "Listening…")
+    raw.startsWith("building index") -> StatusInfo(line = "Preparing your notes…")
+    raw.startsWith("stopped") -> StatusInfo(line = "Couldn't hear the note", warn = true)
+    else -> StatusInfo(line = raw, warn = true) // mic / no-capture guidance shown verbatim
+}
+
+/** "[no confident match after 12s]" → calm human copy. */
+internal fun humanizeNotice(bracket: String): String {
+    val t = bracket.trim().removePrefix("[").removeSuffix("]")
+    return when {
+        t.startsWith("no confident match") -> "No confident match. Try replaying the note."
+        t.startsWith("whisper model not downloaded") ->
+            "The Whisper model isn't downloaded yet — open TACIT and finish setup."
+        t.startsWith("whisper model not ready") -> "Whisper isn't ready yet — try again in a moment."
+        t.startsWith("no speech detected") -> "No speech detected in this note."
+        t.startsWith("no audio decoded") -> "Couldn't read this note's audio."
+        t.startsWith("matching error") -> "Something went wrong while matching — try again."
+        else -> t.replaceFirstChar { it.uppercase() }
+    }
+}
+
+/** "30 Jun · 0:42" — never the raw filename. Falls back to "Voice note". */
+internal fun CandidateFile.toMatchInfo(): MatchInfo {
+    val date = whatsAppDate ?: VoiceNotes.parseWhatsAppName(name)?.dateYmd
+    val parts = listOfNotNull(
+        date?.let { waDateLabel(it) },
+        durationLabel(durationSec),
+    )
+    return MatchInfo(if (parts.isEmpty()) "Voice note" else parts.joinToString("  ·  "))
+}

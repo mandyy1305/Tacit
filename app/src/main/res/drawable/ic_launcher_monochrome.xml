@@ -1,17 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- TACIT launcher foreground: editorial "T." monogram — cream slab-serif T,
-     burnt-amber full stop, sharing a baseline. Fits the 66dp adaptive safe zone. -->
+<!-- Single-tint variant of the "T." monogram for Android 13+ themed icons. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Serif capital T: crossbar with dropped end-serifs, stem, flared foot. -->
     <path
-        android:fillColor="#ECE6DC"
+        android:fillColor="#FFFFFFFF"
         android:pathData="M33,36 L65,36 L65,47 L61.5,47 L61.5,42 L53,42 L53,69 L57.5,69 L57.5,72.5 L40.5,72.5 L40.5,69 L45,69 L45,42 L36.5,42 L36.5,47 L33,47 Z" />
-    <!-- The full stop. -->
     <path
-        android:fillColor="#C4622D"
+        android:fillColor="#FFFFFFFF"
         android:pathData="M64,68 a4.5,4.5 0 1 0 9,0 a4.5,4.5 0 1 0 -9,0 Z" />
 </vector>

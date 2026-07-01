@@ -53,6 +53,10 @@ object Transcripts {
 
     @Synchronized fun count(): Int = map.size
 
+    /** All transcripts, newest first (for the Home recents list). */
+    @Synchronized fun all(limit: Int = Int.MAX_VALUE): List<StoredTranscript> =
+        map.values.sortedByDescending { it.updatedAt }.take(limit)
+
     /** Cached transcript text for this file, or null. */
     @Synchronized fun find(f: File): String? = map[keyFor(f)]?.text
 

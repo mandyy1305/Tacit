@@ -1,9 +1,15 @@
-<resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Base.Theme.Antiwispr" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your light theme here. -->
-        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
+<resources>
+    <!-- TACIT window theme. Compose (TacitTheme) paints everything; this only controls
+         the bare window behind it, so a plain platform parent is enough. -->
+    <style name="Theme.Tacit" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/tacit_paper</item>
+        <item name="android:windowLightStatusBar">true</item>
     </style>
 
-    <style name="Theme.Antiwispr" parent="Base.Theme.Antiwispr" />
+    <!-- Cold-start splash: paper field with the "T." monogram, handing off to Theme.Tacit. -->
+    <style name="Theme.Tacit.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/tacit_paper</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Tacit</item>
+    </style>
 </resources>

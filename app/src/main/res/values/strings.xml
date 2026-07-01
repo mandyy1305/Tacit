@@ -1,5 +1,6 @@
 <resources>
-    <string name="app_name">Antiwispr</string>
-    <string name="accessibility_label">Antiwispr</string>
-    <string name="accessibility_desc">Feasibility skeleton: reads WhatsApp voice-note bubble nodes (duration, timestamp, play control) to drive internal-audio capture and transcription. Personal sideloaded test app.</string>
+    <string name="app_name">TACIT</string>
+    <string name="tagline">Every voice note, read.</string>
+    <string name="accessibility_label">TACIT</string>
+    <string name="accessibility_desc">TACIT reads WhatsApp voice-note bubbles (duration, timestamp, play control) to transcribe them on this device. Personal sideloaded app; nothing leaves this phone.</string>
 </resources>

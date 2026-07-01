@@ -34,6 +34,22 @@ object WhisperModel {
     @Volatile var downloading: Boolean = false
         private set
 
+    /** Total bytes of all model files (for the UI progress bar). */
+    val totalBytes: Long get() = FILES.sumOf { it.size }
+
+    /** Bytes on disk so far: completed files + current file position. Live during download. */
+    @Volatile var downloadedBytes: Long = 0L
+        private set
+
+    /** Remove the model files so they can be re-downloaded. No-op while a download runs. */
+    fun delete(context: Context) {
+        if (downloading) return
+        dir(context).listFiles()?.forEach { it.delete() }
+        downloadedBytes = 0L
+        status = "not downloaded"
+        AppLog.i("[whisper] model files deleted.")
+    }
+
     private val exec = Executors.newSingleThreadExecutor { r -> Thread(r, "whisper-dl").apply { isDaemon = true } }
 
     fun dir(context: Context): File = File(context.filesDir, "whisper").apply { mkdirs() }
@@ -51,12 +67,22 @@ object WhisperModel {
         exec.execute {
             downloading = true
             try {
+                // Seed the byte counter with files that are already complete on disk.
+                var doneBytes = FILES.sumOf { f ->
+                    val file = File(dir(context), f.name)
+                    if (file.exists() && file.length() == f.size) f.size else 0L
+                }
+                downloadedBytes = doneBytes
                 for (f in FILES) {
                     val dst = File(dir(context), f.name)
                     if (dst.exists() && dst.length() == f.size) { onProgress("[whisper] have ${f.name}."); continue }
                     status = "downloading ${f.name}"
                     onProgress("[whisper] downloading ${f.name} (${f.size / 1_000_000} MB)…")
-                    downloadOne("$BASE/${f.name}", dst, f.size, onProgress)
+                    downloadOne("$BASE/${f.name}", dst, f.size, onProgress) { current ->
+                        downloadedBytes = doneBytes + current
+                    }
+                    doneBytes += f.size
+                    downloadedBytes = doneBytes
                 }
                 val ok = isReady(context)
                 status = if (ok) "ready" else "incomplete"
@@ -70,7 +96,13 @@ object WhisperModel {
         }
     }
 
-    private fun downloadOne(url: String, dst: File, expected: Long, onProgress: (String) -> Unit) {
+    private fun downloadOne(
+        url: String,
+        dst: File,
+        expected: Long,
+        onProgress: (String) -> Unit,
+        onBytes: (Long) -> Unit = {},
+    ) {
         val tmp = File(dst.parentFile, dst.name + ".tmp")
         val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
             connectTimeout = 30_000; readTimeout = 60_000; instanceFollowRedirects = true
@@ -86,6 +118,7 @@ object WhisperModel {
                         if (n < 0) break
                         out.write(buf, 0, n)
                         total += n
+                        onBytes(total)
                         val pct = if (expected > 0) (total * 100 / expected).toInt() else -1
                         if (pct != lastPct && pct % 10 == 0) { lastPct = pct; onProgress("[whisper] ${dst.name}: $pct%") }
                     }

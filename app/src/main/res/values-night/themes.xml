@@ -1,7 +1,13 @@
-<resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Base.Theme.Antiwispr" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your dark theme here. -->
-        <!-- <item name="colorPrimary">@color/my_dark_primary</item> -->
+<resources>
+    <!-- TACIT window theme, espresso night variant. -->
+    <style name="Theme.Tacit" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/tacit_espresso</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <style name="Theme.Tacit.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/tacit_espresso</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Tacit</item>
     </style>
 </resources>

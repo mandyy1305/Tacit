@@ -32,6 +32,12 @@ class Indexer(private val appContext: Context) {
     @Volatile var status: String = "not built"
         private set
 
+    // Determinate build progress for the UI (files processed / files to process); 0/0 when idle.
+    @Volatile var progressDone: Int = 0
+        private set
+    @Volatile var progressTotal: Int = 0
+        private set
+
     private val indexFile = File(appContext.filesDir, "fpindex.bin")
     private val exec = Executors.newSingleThreadExecutor { r -> Thread(r, "indexer").apply { isDaemon = true } }
     private val transcriber by lazy { WhisperTranscriber(appContext) } // only used for new-note auto-transcribe
@@ -50,6 +56,8 @@ class Indexer(private val appContext: Context) {
                 status = "build failed: ${e.message}"
             } finally {
                 building = false
+                progressDone = 0
+                progressTotal = 0
             }
         }
     }
@@ -66,11 +74,15 @@ class Indexer(private val appContext: Context) {
             AppLog.w("[indexer] ${files.size} files exceeds cap ${IndexConfig.MAX_FILES}; indexing first ${IndexConfig.MAX_FILES}.")
         }
 
+        progressTotal = minOf(files.size, IndexConfig.MAX_FILES)
+        progressDone = 0
+
         val result = ArrayList<StoredFile>(files.size)
         var decoded = 0
         var reused = 0
         for ((i, f) in files.withIndex()) {
             if (result.size >= IndexConfig.MAX_FILES) break
+            progressDone = minOf(i + 1, progressTotal)
             val k = key(f.absolutePath, f.lastModified(), f.length())
             val existing = byKey[k]
             if (existing != null) {

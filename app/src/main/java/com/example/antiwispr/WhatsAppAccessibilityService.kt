@@ -57,7 +57,15 @@ class WhatsAppAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
         AppLog.w("[a11y] SERVICE UNBOUND (disabled in settings or stopped).")
+        // Tear the overlay window down — a disabled service must not leak the window
+        // (or, with Compose, its Recomposer/lifecycle).
+        if (::overlay.isInitialized) overlay.dismiss()
         return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        if (::overlay.isInitialized) overlay.dismiss()
+        super.onDestroy()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {

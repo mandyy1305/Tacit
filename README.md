@@ -1,9 +1,15 @@
-# Antiwispr
+# TACIT
+
+*Every voice note, read.*
 
 Personal, sideloaded Android tool that identifies which WhatsApp voice note is playing (Shazam-style
 acoustic fingerprint over a persistent on-disk index) and transcribes it on-device with whisper-small
 (sherpa-onnx). Internal audio via MediaProjection + AudioPlaybackCapture, with a mic foreground-service
 fallback when the screen isn't shared. WhatsApp play-taps are detected via an accessibility service.
+The transcript appears in a floating card right over the chat.
+
+UI is 100% Jetpack Compose ("Editorial Ink" design system — Fraunces + Inter, paper/ink/amber),
+with a guided onboarding flow, home dashboard, transcript search/reader, and settings.
 
 > Note: this reads WhatsApp's private data (accessibility + audio capture + file access). It's a
 > personal/sideload experiment, not a Play-Store-distributable app.
@@ -25,22 +31,30 @@ build will fail to resolve `com.k2fsa.sherpa.onnx.*`.
 
 ## Whisper model (downloaded at runtime, not in the repo)
 
-The whisper-small model (~360 MB) is **not** bundled either. In the app, tap **Download Whisper model**
-once; it fetches three files (`small-encoder.int8.onnx`, `small-decoder.int8.onnx`, `small-tokens.txt`)
-from `huggingface.co/csukuangfj/sherpa-onnx-whisper-small` into the app's `filesDir`.
+The whisper-small model (~360 MB) is **not** bundled either. Onboarding downloads it on the
+"Bring the words on-device" step (three files — `small-encoder.int8.onnx`, `small-decoder.int8.onnx`,
+`small-tokens.txt` — from `huggingface.co/csukuangfj/sherpa-onnx-whisper-small` into the app's `filesDir`).
+It can be re-downloaded from Settings → Whisper model.
 
 ## First-run setup (in the app)
 
-1. Grant permissions: microphone, overlay (SYSTEM_ALERT_WINDOW), all-files access, notifications.
-2. Enable the accessibility service (Settings → Accessibility → Antiwispr).
-3. Download the Whisper model.
-4. Build the fingerprint index (scans the WhatsApp Voice Notes folder).
-5. Optional: start a screen-share session for best capture accuracy (mic fallback works without it).
+The app walks you through everything on first launch — each permission with the reason it's needed,
+then the model download and the fingerprint index, auto-advancing as steps complete:
 
-Then open a WhatsApp chat and play a voice note.
+1. Microphone, overlay, all-files access, notifications (optional).
+2. Accessibility service (deep-links to Settings → Installed apps → TACIT).
+3. Whisper model download (~360 MB, progress shown).
+4. Fingerprint index of the WhatsApp Voice Notes folder.
+
+Then open a WhatsApp chat and play a voice note. Optional: start **Precision listening**
+(screen share) from Home for the most accurate capture — mic fallback works without it.
 
 ## Notes
 
 - minSdk 30, targetSdk 36. APK packages arm64-v8a only (see `abiFilters`); add `x86_64` for an emulator.
-- Transcripts are cached on-device and searchable in-app. New notes are auto-transcribed; the existing
-  backlog is transcribed on-demand (the first time you play each).
+- Compose is enabled through AGP's built-in Kotlin: the `org.jetbrains.kotlin.plugin.compose` version in
+  `gradle/libs.versions.toml` must match the Kotlin embedded in the AGP release (2.2.10 for AGP 9.2.1).
+- Transcripts are cached on-device and searchable in-app (Home → search). New notes are auto-transcribed;
+  the existing backlog is transcribed on-demand (the first time you play each).
+- Settings → Developer → **Preview overlay card** replays fake listening → match → transcript sequences
+  over the screen, for iterating on the overlay design without WhatsApp.

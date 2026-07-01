@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
+    <!-- Editorial Ink brand anchors (full palette lives in Compose ui/theme/Color.kt). -->
+    <color name="tacit_paper">#FAF7F2</color>
+    <color name="tacit_ink">#1A1714</color>
+    <color name="tacit_espresso">#141210</color>
+    <color name="tacit_cream">#ECE6DC</color>
+    <color name="tacit_amber">#C4622D</color>
 </resources>

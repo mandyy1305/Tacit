@@ -1,5 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
+    // Compose compiler; pairs with AGP 9's built-in Kotlin (no org.jetbrains.kotlin.android needed).
+    alias(libs.plugins.kotlin.compose)
 }
 
 android {
@@ -38,17 +40,35 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+    buildFeatures {
+        compose = true
+    }
 }
 
 dependencies {
     // On-device ASR: prebuilt sherpa-onnx Android AAR (bundles ONNX Runtime + JNI + Kotlin API).
     // Vendored at app/libs/sherpa-onnx.aar (k2-fsa release v1.13.3).
     implementation(files("libs/sherpa-onnx.aar"))
-    implementation(libs.androidx.activity.ktx)
-    implementation(libs.androidx.appcompat)
-    implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.core.ktx)
-    implementation(libs.material)
+    implementation(libs.androidx.core.splashscreen)
+
+    val composeBom = platform(libs.androidx.compose.bom)
+    implementation(composeBom)
+    androidTestImplementation(composeBom)
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.core)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    // Explicit: OverlayComposeWindow implements SavedStateRegistryOwner for the
+    // WindowManager-hosted ComposeView (no Activity in the overlay path).
+    implementation(libs.androidx.savedstate.ktx)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
