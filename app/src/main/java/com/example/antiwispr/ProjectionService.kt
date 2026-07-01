@@ -29,6 +29,11 @@ interface AudioWindowSource {
     /** Blocking: returns the next [seconds] of audio starting at the moment of the call.
      *  MUST be called off the main thread (it waits in real time). */
     fun captureWindow(seconds: Double): ShortArray
+    /** Non-blocking: current write position (total samples written since session start). */
+    fun mark(): Long
+    /** Non-blocking: returns samples from [mark] up to the current write head (clamped to the ring).
+     *  For streaming: mark() at the start, then call repeatedly as audio accumulates. */
+    fun readSince(mark: Long): ShortArray
 }
 
 /**
@@ -51,7 +56,7 @@ class ProjectionService : Service(), AudioWindowSource {
 
         private const val CHANNEL_ID = "antiwispr_projection"
         private const val NOTIF_ID = 0x4157 // "AW"
-        private const val RING_SECONDS = 12
+        private const val RING_SECONDS = 16 // holds a full streaming listen window + slack
 
         /** Process-wide handle to the live capture source (null when no session). */
         @Volatile var source: AudioWindowSource? = null
@@ -236,6 +241,23 @@ class ProjectionService : Service(), AudioWindowSource {
         AppLog.i("[projection] captureWindow done: ${out.size} samples, RMS=%.5f %s".format(
             rms, if (rms < 0.0005) "(≈silent)" else "(signal)"))
         return out
+    }
+
+    override fun mark(): Long = synchronized(lock) { written }
+
+    override fun readSince(mark: Long): ShortArray {
+        if (!sessionActive) return ShortArray(0)
+        synchronized(lock) {
+            val cap = ring.size
+            if (cap == 0) return ShortArray(0)
+            var from = mark
+            val oldest = written - cap
+            if (from < oldest) from = oldest // clamp: anything older fell out of the ring
+            val count = (written - from).coerceIn(0, cap.toLong()).toInt()
+            val out = ShortArray(count)
+            for (i in 0 until count) out[i] = ring[((from + i) % cap).toInt()]
+            return out
+        }
     }
 
     private fun startAsForeground() {

@@ -1,6 +1,5 @@
 package com.example.antiwispr
 
-import java.io.File
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -139,26 +138,4 @@ object Fingerprinter {
         for ((d, c) in hist) if (c > bestC) { bestC = c; bestD = d }
         return FpScore(bestC, bestD, total)
     }
-}
-
-/**
- * In-memory fingerprint index, keyed by path|mtime|size so a changed/replaced file re-fingerprints.
- * Only files that reach the acoustic stage are fingerprinted, so it fills incrementally; this is the
- * "index" the matcher reuses across taps. (No on-disk persistence — process-lifetime only.)
- */
-class FingerprintCache(private val maxEntries: Int = 500) {
-    private val map = LinkedHashMap<String, Fingerprint>()
-
-    fun keyFor(f: File): String = "${f.absolutePath}|${f.lastModified()}|${f.length()}"
-
-    @Synchronized fun get(key: String): Fingerprint? = map[key]
-
-    @Synchronized fun put(key: String, fp: Fingerprint) {
-        map[key] = fp
-        while (map.size > maxEntries) {
-            val it = map.keys.iterator(); it.next(); it.remove()
-        }
-    }
-
-    @Synchronized fun size(): Int = map.size
 }

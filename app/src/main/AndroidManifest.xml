@@ -17,11 +17,17 @@
          mandatory FGS notification visible — capture works without it. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- Mic fallback runs in a foreground service (type=microphone) — required because Android mutes
+         the mic for background apps; capturing from the accessibility service alone yields silence. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Floating result card + scrollable debug dump drawn over WhatsApp. Granted via a
          Settings screen (not a runtime dialog); checked with Settings.canDrawOverlays(). -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- One-time download of the whisper-small ASR model to filesDir. Normal/install-time perm. -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
 
@@ -45,6 +51,20 @@
             </intent-filter>
         </activity>
 
+        <!-- Transcript search screen. -->
+        <activity
+            android:name=".SearchActivity"
+            android:exported="false"
+            android:label="Search transcripts" />
+
+        <!-- Invisible trampoline so the overlay's "Share screen" button can request MediaProjection
+             consent (a service can't startActivityForResult). Translucent so nothing flashes. -->
+        <activity
+            android:name=".ProjectionRequestActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <!-- Internal-audio capture (MediaProjection + AudioPlaybackCapture) owns a
              mediaProjection-typed foreground service. On Android 14+ the system requires the
              FGS (with this exact type) to be running BEFORE getMediaProjection() is called. -->
@@ -52,6 +72,12 @@
             android:name=".ProjectionService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- Mic-fallback capture host (foreground service, type=microphone). -->
+        <service
+            android:name=".MicCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <!-- Accessibility service, scoped to com.whatsapp via the config below. The
              android:permission=BIND_ACCESSIBILITY_SERVICE is what the OS requires so only the

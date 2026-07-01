@@ -13,6 +13,12 @@ object Toggles {
      *  so it can be tested in isolation. */
     @Volatile var pauseOnPlay: Boolean = false
 
-    /** Run the capture -> match-stub -> transcribe-stub -> overlay flow on a detected play-tap. */
+    /** Run the capture -> match -> transcribe-stub -> overlay flow on a detected play-tap. */
     @Volatile var orchestrationEnabled: Boolean = true
+
+    /** Force Whisper to Hindi (best for Hindi-dominant code-switch). Off = auto-detect. */
+    @Volatile var forceHindi: Boolean = true
+
+    /** When no screen-share session is active at play-tap, fall back to mic capture (lower accuracy). */
+    @Volatile var micFallbackEnabled: Boolean = true
 }

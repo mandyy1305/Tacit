@@ -106,8 +106,24 @@ class MainActivity : AppCompatActivity() {
         AppLog.i("=== Antiwispr transcription skeleton ===")
         AppLog.i("minSdk=30 (AudioPlaybackCapture needs API 29+; all-files needs 30). targetSdk=36.")
         AppLog.i("Flow: grant perms -> enable accessibility -> Start session (consent once) ->")
-        AppLog.i("open a WhatsApp chat and tap a voice note's play button.")
-        AppLog.i("MATCHING and TRANSCRIPTION are STUBS; everything else is real.")
+        AppLog.i("build the fingerprint index, then open a WhatsApp chat and play a voice note.")
+        AppLog.i("MATCHING is real (persistent fingerprint index, continuous listen). TRANSCRIPTION is a STUB.")
+
+        // Load any persisted index now and refresh incrementally in the background (cheap once built).
+        IndexHolder.get(this).loadOrBuild { AppLog.i(it); ui.post { refreshStatus() } }
+    }
+
+    private fun buildIndex() {
+        if (!Environment.isExternalStorageManager())
+            AppLog.i("note: grant all-files access first, or the index will find 0 files.")
+        AppLog.i("building / refreshing fingerprint index (first build decodes every note — slow)…")
+        IndexHolder.get(this).loadOrBuild { AppLog.i(it); ui.post { refreshStatus() } }
+    }
+
+    private fun downloadWhisper() {
+        if (WhisperModel.isReady(this)) { AppLog.i("whisper model already present (ready)."); refreshStatus(); return }
+        AppLog.i("downloading whisper-small model (~360 MB, one-time, over Wi-Fi recommended)…")
+        WhisperModel.download(this) { AppLog.i(it); ui.post { refreshStatus() } }
     }
 
     override fun onResume() {
@@ -142,19 +158,37 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(statusView)
 
-        root.addView(section("Permissions"))
+        root.addView(TextView(this).apply {
+            text = "First-time setup: work through 1→5. The app also works with just mic (no screen share) — sharing is optional but more accurate."
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setPadding(0, 0, 0, dp(6))
+        })
+
+        root.addView(section("1) Permissions"))
         root.addView(button("Grant microphone (RECORD_AUDIO)") { requestRecord() })
         root.addView(button("Grant overlay (SYSTEM_ALERT_WINDOW)") { requestOverlay() })
         root.addView(button("Grant all-files access (read .opus)") { requestAllFiles() })
         root.addView(button("Grant notifications (FGS visibility)") { requestNotifications() })
         root.addView(button("Open Accessibility settings (enable service)") { openAccessibility() })
 
-        root.addView(section("Projection session"))
+        root.addView(section("2) Screen-share session (optional — mic fallback works without it)"))
         root.addView(button("Start transcription session (consent ONCE)") { startSession() })
         root.addView(button("Stop session (release projection)") { stopSession() })
 
-        root.addView(section("Voice Notes folder"))
+        root.addView(section("3) Voice Notes folder"))
         root.addView(button("Verify Voice Notes folder on this device") { AppLog.i(VoiceNotes.report()) })
+
+        root.addView(section("4) Fingerprint index"))
+        root.addView(button("Build / refresh voice-note index") { buildIndex() })
+
+        root.addView(section("5) Transcription (Whisper)"))
+        root.addView(button("Download Whisper model (~360 MB, once)") { downloadWhisper() })
+        root.addView(checkbox("Force Hindi (else auto-detect)", Toggles.forceHindi) {
+            Toggles.forceHindi = it; AppLog.i("forceHindi = $it (recognizer rebuilds on next transcribe)")
+        })
+
+        root.addView(section("Transcripts"))
+        root.addView(button("🔎 Search transcripts") { startActivity(Intent(this, SearchActivity::class.java)) })
 
         root.addView(section("Toggles"))
         root.addView(checkbox("Diagnostic mode (dump node tree on tap)", Toggles.diagnosticMode) {
@@ -163,8 +197,11 @@ class MainActivity : AppCompatActivity() {
         root.addView(checkbox("Pause on play (ACTION_CLICK back on the node)", Toggles.pauseOnPlay) {
             Toggles.pauseOnPlay = it; AppLog.i("pauseOnPlay = $it")
         })
-        root.addView(checkbox("Orchestration (capture -> match -> transcribe -> overlay)", Toggles.orchestrationEnabled) {
+        root.addView(checkbox("Orchestration (listen -> match -> transcribe -> overlay)", Toggles.orchestrationEnabled) {
             Toggles.orchestrationEnabled = it; AppLog.i("orchestrationEnabled = $it")
+        })
+        root.addView(checkbox("Mic fallback when screen isn't shared", Toggles.micFallbackEnabled) {
+            Toggles.micFallbackEnabled = it; AppLog.i("micFallbackEnabled = $it")
         })
 
         root.addView(section("Log"))
@@ -272,6 +309,12 @@ class MainActivity : AppCompatActivity() {
         sb.append("  notif=").append(yn(notifGranted()))
         sb.append("\naccessibility=").append(yn(isAccessibilityEnabled()))
         sb.append("  session=").append(yn(ProjectionService.sessionActive))
+        val idx = IndexHolder.get(this)
+        sb.append("\nindex: ").append(if (idx.building) "building…" else idx.status)
+        sb.append("\nwhisper: ").append(if (WhisperModel.isReady(this)) "ready" else WhisperModel.status)
+        sb.append("\ntranscripts: ").append(Transcripts.get(this).count()).append(" stored")
+        sb.append("\ndetection: ").append(DetectionHealth.summary())
+        sb.append("\nmic-fallback: ").append(if (Toggles.micFallbackEnabled) "on" else "off")
         statusView.text = sb.toString()
     }
 

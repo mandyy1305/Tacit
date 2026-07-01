@@ -2,7 +2,6 @@ package com.example.antiwispr
 
 import android.accessibilityservice.AccessibilityService
 import android.graphics.Rect
-import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import java.text.SimpleDateFormat
@@ -37,12 +36,6 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     private val timeRegex = Regex("""\b(\d{1,2}):(\d{2})\b""")
     private val clockFmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
-    // Total durations captured while a note is IDLE (button shows "Play" => the time on screen is
-    // the TOTAL, not an elapsed counter), keyed by the bubble's send timestamp. This is how we get
-    // a reliable duration to feed matching, since by play-tap time the field is already counting up.
-    private val durationByTimestamp = LinkedHashMap<String, String>()
-    @Volatile private var lastScanUptime = 0L
-
     override fun onServiceConnected() {
         super.onServiceConnected()
         overlay = OverlayController(applicationContext)
@@ -64,11 +57,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         try {
             when (event.eventType) {
                 AccessibilityEvent.TYPE_VIEW_CLICKED -> handleClick(event)
-                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                    // Use these (throttled) to cache the total duration of any IDLE voice notes
-                    // currently on screen, before they're played and the field becomes elapsed.
-                    maybeCacheDurations()
-                }
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> { /* not needed anymore */ }
                 else -> {}
             }
         } catch (e: Exception) {
@@ -97,34 +86,22 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         when (control) {
             Control.NONE -> { AppLog.i("[a11y] not a voice-note control — ignoring, no overlay."); return }
             Control.STOPPED -> { AppLog.i("[a11y] playback PAUSED/STOPPED (post-click desc shows 'Play') — skipping capture/overlay."); return }
-            Control.STARTED -> { AppLog.i("[a11y] ✅ playback STARTED (post-click desc shows 'Pause') — capturing.") }
+            Control.STARTED -> {
+                DetectionHealth.lastPlayDetectMs = System.currentTimeMillis()
+                AppLog.i("[a11y] ✅ playback STARTED — capturing.")
+            }
         }
 
-        // Extraction is best-effort. IMPORTANT: once playback starts, the bubble's time field
-        // becomes a LIVE elapsed counter (0:00 → total). We read it post-click, so it's the
-        // elapsed value, NOT the total — we deliberately do NOT use it as the duration. The total
-        // duration comes from the matched file's metadata downstream. The bubble TIMESTAMP (send
-        // time) is static, so it's still usable.
+        // Matching no longer needs the bubble duration (the persistent index identifies the note
+        // acoustically). We still grab the static send-TIMESTAMP for the overlay display.
         var timestamp: String? = null
-        var durationSec: Double? = null
         try {
             val row = findMessageRow(src)
-            AppLog.i("[a11y] bubble ${describe(row, "ROW")}")
             val times = collectTimeTexts(row, 0, 8)
-            AppLog.i("[a11y] time-like texts in bubble: $times (smallest is the LIVE elapsed counter, not total duration)")
             timestamp = if (times.size >= 2) times.maxByOrNull { parseTimeToSeconds(it) ?: -1.0 } else null
-            if (timestamp != null) AppLog.i("[a11y] TIMESTAMP (provisional) = $timestamp")
-            else AppLog.w("[a11y] TIMESTAMP not distinguishable (need ≥2 time texts) or not exposed.")
-
-            // Use the TOTAL duration we cached for this bubble while it was idle (pre-play).
-            val cached = timestamp?.let { durationByTimestamp[it] }
-            durationSec = cached?.let { parseTimeToSeconds(it) }
-            if (durationSec != null) AppLog.i("[a11y] DURATION = $cached (${durationSec}s), cached pre-play by timestamp $timestamp.")
-            else AppLog.w("[a11y] no cached pre-play duration for timestamp=$timestamp — matcher will fall back to file metadata.")
-
-            logRangeInfo(row) // if a seekbar exposes the total via RangeInfo, surface it for later use
+            if (timestamp != null) AppLog.i("[a11y] timestamp (display only) = $timestamp")
         } catch (e: Exception) {
-            AppLog.e("[a11y] timestamp/duration extraction failed (non-fatal): ${e.message}", e)
+            AppLog.e("[a11y] timestamp extraction failed (non-fatal): ${e.message}", e)
         }
 
         if (Toggles.pauseOnPlay) {
@@ -133,7 +110,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         }
 
         if (Toggles.orchestrationEnabled) {
-            orchestrator.onPlayTap(durationSec, timestamp)
+            orchestrator.onPlayTap(null, timestamp) // duration unused; index handles identification
         } else {
             AppLog.i("[a11y] orchestration disabled — skipping capture/match/transcribe.")
         }
@@ -144,19 +121,43 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     private fun classifyControl(n: AccessibilityNodeInfo): Control {
         val id = n.viewIdResourceName ?: ""
         val desc = (n.contentDescription?.toString() ?: "").lowercase(Locale.US)
-        val isControl = id == CONTROL_BTN_ID ||
-                id == "com.whatsapp:id/control_button_container" ||  // click can land on the wrapper
-                desc.contains("voice message") || desc.contains("voice note") || desc.contains("push to talk")
-        if (!isControl) return Control.NONE
-        // IMPORTANT: TYPE_VIEW_CLICKED fires AFTER WhatsApp toggles the button, and we read the
-        // LIVE node — so the contentDescription is the POST-click state, i.e. inverted from the
-        // icon you tapped. Tapping ▶ to START playback yields desc="Pause voice message"; tapping
-        // ⏸ to PAUSE yields desc="Play voice message". Map by what just happened, not the word.
-        return when {
-            desc.contains("pause") -> Control.STARTED // now shows "Pause" => playback just STARTED
-            desc.contains("play") -> Control.STOPPED  // now shows "Play"  => playback just PAUSED/STOPPED
-            else -> Control.STARTED                   // control button, ambiguous desc → assume started
+        val knownId = id == CONTROL_BTN_ID || id == "com.whatsapp:id/control_button_container"
+        val descMatch = desc.contains("voice message") || desc.contains("voice note") || desc.contains("push to talk")
+
+        if (knownId) { DetectionHealth.everSawKnownId = true; DetectionHealth.lastKnownIdMs = System.currentTimeMillis() }
+
+        if (knownId || descMatch) {
+            // IMPORTANT: TYPE_VIEW_CLICKED fires AFTER WhatsApp toggles the button, and we read the LIVE
+            // node — so the contentDescription is the POST-click state (inverted from the icon tapped).
+            // ▶ START -> desc="Pause voice message"; ⏸ PAUSE -> desc="Play voice message".
+            return when {
+                desc.contains("pause") -> Control.STARTED
+                desc.contains("play") -> Control.STOPPED
+                else -> Control.STARTED
+            }
         }
+
+        // RESILIENCE: if WhatsApp renamed the id/desc, fall back to STRUCTURE — a clickable control whose
+        // message row contains a seekbar (rangeInfo) AND a m:ss duration text looks like a voice note.
+        // Bounded to the single row (findMessageRow) so it doesn't false-fire on stickers/list rows.
+        if (n.isClickable) {
+            val row = findMessageRow(n)
+            if (hasRangeInfo(row, 0) && collectTimeTexts(row, 0, 8).isNotEmpty()) {
+                DetectionHealth.usedFallback = true
+                DetectionHealth.lastFallbackMs = System.currentTimeMillis()
+                AppLog.w("⚠ detection via STRUCTURAL fallback (id='$id' desc='$desc') — WhatsApp control id may have changed.")
+                return Control.STARTED
+            }
+        }
+        return Control.NONE
+    }
+
+    /** True if any descendant is a range/seek node (SeekBar/ProgressBar expose RangeInfo). */
+    private fun hasRangeInfo(n: AccessibilityNodeInfo?, depth: Int): Boolean {
+        if (n == null || depth > 8) return false
+        if (n.rangeInfo != null) return true
+        for (i in 0 until n.childCount) if (hasRangeInfo(n.getChild(i), depth + 1)) return true
+        return false
     }
 
     /** Climb to the message-row container (direct child of the chat ListView/RecyclerView). */
@@ -244,55 +245,5 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         val m = p[0].toIntOrNull() ?: return null
         val s = p[1].toIntOrNull() ?: return null
         return (m * 60 + s).toDouble()
-    }
-
-    /** Logs any seekbar/progress node's RangeInfo — its max sometimes encodes the total duration,
-     *  which would be a stable (non-elapsing) source if we want bubble-side duration later. */
-    private fun logRangeInfo(root: AccessibilityNodeInfo?) {
-        fun walk(n: AccessibilityNodeInfo?, depth: Int) {
-            if (n == null || depth > 8) return
-            val ri = n.rangeInfo
-            if (ri != null) AppLog.i("[a11y] range node id=${n.viewIdResourceName} cls=${shortCls(n.className)} " +
-                    "min=${ri.min} max=${ri.max} cur=${ri.current} (max may encode total duration)")
-            for (i in 0 until n.childCount) walk(n.getChild(i), depth + 1)
-        }
-        walk(root, 0)
-    }
-
-    // ---- pre-play duration cache ------------------------------------------------
-
-    private fun maybeCacheDurations() {
-        val now = SystemClock.uptimeMillis()
-        if (now - lastScanUptime < 500) return // throttle: content-changed is very chatty
-        lastScanUptime = now
-        try { cacheVisibleDurations() } catch (e: Exception) { AppLog.e("[a11y] duration scan failed (non-fatal): ${e.message}", e) }
-    }
-
-    /** Scan all on-screen voice-note controls; for IDLE ones (showing "Play"), the displayed time
-     *  is the TOTAL duration. Cache it keyed by the bubble's timestamp so a later play-tap can
-     *  recover the total even though the field will be counting up by then. */
-    private fun cacheVisibleDurations() {
-        val root = rootInActiveWindow ?: return
-        val controls = root.findAccessibilityNodeInfosByViewId(CONTROL_BTN_ID) ?: return
-        var added = 0
-        for (c in controls) {
-            val desc = (c.contentDescription?.toString() ?: "").lowercase(Locale.US)
-            if (!desc.contains("play")) continue // playing/paused-mid shows elapsed, not total — skip
-            val row = findMessageRow(c)
-            val times = collectTimeTexts(row, 0, 8)
-            if (times.size < 2) continue
-            val dur = times.minByOrNull { parseTimeToSeconds(it) ?: Double.MAX_VALUE } ?: continue
-            val ts = times.maxByOrNull { parseTimeToSeconds(it) ?: -1.0 } ?: continue
-            if (dur == ts) continue
-            if (durationByTimestamp[ts] != dur) {
-                durationByTimestamp[ts] = dur
-                added++
-                // bound the cache
-                while (durationByTimestamp.size > 200) {
-                    val it = durationByTimestamp.keys.iterator(); it.next(); it.remove()
-                }
-            }
-        }
-        if (added > 0) AppLog.i("[a11y] cached total duration for $added idle voice note(s); cache size=${durationByTimestamp.size}.")
     }
 }

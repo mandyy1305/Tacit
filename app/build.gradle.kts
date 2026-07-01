@@ -21,6 +21,10 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // sherpa-onnx ships native .so for several ABIs in its AAR; package only arm64 (real
+        // device) to keep the APK small. Add "x86_64" here if you need to run on an emulator.
+        ndk { abiFilters += "arm64-v8a" }
     }
 
     buildTypes {
@@ -37,6 +41,9 @@ android {
 }
 
 dependencies {
+    // On-device ASR: prebuilt sherpa-onnx Android AAR (bundles ONNX Runtime + JNI + Kotlin API).
+    // Vendored at app/libs/sherpa-onnx.aar (k2-fsa release v1.13.3).
+    implementation(files("libs/sherpa-onnx.aar"))
     implementation(libs.androidx.activity.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.constraintlayout)

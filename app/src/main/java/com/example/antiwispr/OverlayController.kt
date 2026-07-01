@@ -39,6 +39,9 @@ class OverlayController(private val ctx: Context) {
     private var infoTv: TextView? = null
     private var candTv: TextView? = null
     private var transcriptTv: TextView? = null
+    private var bannerRow: LinearLayout? = null
+    private var bannerText: TextView? = null
+    @Volatile private var onShareAction: (() -> Unit)? = null
 
     private fun dp(v: Int) = (v * density).roundToInt()
 
@@ -58,21 +61,42 @@ class OverlayController(private val ctx: Context) {
         if (!canDraw()) return@onMain
         if (card == null) buildCard()
         spinner?.visibility = View.VISIBLE
+        bannerRow?.visibility = View.GONE // default hidden; mic path re-shows it
         infoTv?.text = message
         candTv?.text = "candidates: …"
         transcriptTv?.text = "transcript: …"
         AppLog.i("[overlay] showing result card: \"$message\"")
     }
 
+    /** Warn that we're on the mic fallback (no screen share) and offer a Share-screen button. */
+    fun showMicFallbackBanner(onShare: () -> Unit) = onMain {
+        if (!canDraw()) return@onMain
+        if (card == null) buildCard()
+        onShareAction = onShare
+        bannerText?.text = "⚠ Screen not shared — using mic (lower accuracy)."
+        bannerRow?.visibility = View.VISIBLE
+    }
+
+    fun clearBanner() = onMain { bannerRow?.visibility = View.GONE }
+
     fun setInfo(durationSec: Double?, timestamp: String?) = onMain {
         val d = durationSec?.let { "%.0fs".format(it) } ?: "?"
         infoTv?.text = "duration=$d   timestamp=${timestamp ?: "?"}"
     }
 
+    /** Live one-line status during continuous listening (keeps the spinner spinning). */
+    fun setStatus(text: String) = onMain {
+        if (!canDraw()) return@onMain
+        if (card == null) buildCard()
+        spinner?.visibility = View.VISIBLE
+        candTv?.text = text
+    }
+
     fun setCandidates(candidates: List<CandidateFile>, confident: Boolean) = onMain {
         spinner?.visibility = View.GONE
         if (candidates.isEmpty()) { candTv?.text = "match: (no candidates)"; return@onMain }
-        val header = if (confident) "✅ match (fp hits):" else "⚠ uncertain — top candidates (fp hits):"
+        val verdict = if (confident) "✅ match" else "⚠ uncertain"
+        val header = "$verdict — compared ${candidates.size} candidate(s) (fp hits):"
         candTv?.text = header + "\n" + candidates.take(6).mapIndexed { i, c ->
             val sc = if (c.score.isNaN()) "?" else "%.0f".format(c.score)
             "${if (i == 0) "▶" else "•"} ${c.name}  $sc  (%.0fs)".format(c.durationSec)
@@ -117,6 +141,33 @@ class OverlayController(private val ctx: Context) {
             setOnClickListener { dismiss() }
         })
         root.addView(header)
+
+        // Mic-fallback warning banner + Share-screen button (hidden unless on the mic path).
+        val banner = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            visibility = View.GONE
+            setPadding(0, dp(6), 0, dp(6))
+        }
+        val bt = TextView(ctx).apply {
+            text = "⚠ Screen not shared — using mic (lower accuracy)."
+            setTextColor(0xFFFFC107.toInt())
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val shareBtn = TextView(ctx).apply {
+            text = " Share screen "
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            textSize = 12f
+            background = GradientDrawable().apply { cornerRadius = dp(8).toFloat(); setColor(0xFF2E7D32.toInt()) }
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            setOnClickListener { onShareAction?.invoke() }
+        }
+        banner.addView(bt)
+        banner.addView(shareBtn)
+        root.addView(banner)
+        bannerRow = banner
+        bannerText = bt
 
         spinner = ProgressBar(ctx).apply {
             isIndeterminate = true

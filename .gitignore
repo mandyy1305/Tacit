@@ -13,3 +13,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Vendored prebuilt native lib — large binary, re-download from the pinned release (see README).
+app/libs/*.aar
