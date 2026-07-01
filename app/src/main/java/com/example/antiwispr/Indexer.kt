@@ -101,6 +101,14 @@ class Indexer(private val appContext: Context) {
                 }
             }
         }
+        // Nothing new/removed and we already have a live snapshot? Skip the (3.7M-entry) re-sort +
+        // save entirely — this makes the on-every-play-tap refresh near-free unless a note actually arrived.
+        val existing = snapshot
+        if (decoded == 0 && existing != null && existing.fileCount == result.size) {
+            onProgress("[indexer] no new/changed notes — index unchanged (${result.size}).")
+            return
+        }
+
         onProgress("[indexer] fingerprinted: $decoded new, $reused reused. Building index…")
 
         val snap = buildSnapshot(result)

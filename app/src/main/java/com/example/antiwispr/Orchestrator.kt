@@ -33,19 +33,45 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
     private val indexer = IndexHolder.get(context)
     private val transcriber: Transcriber = WhisperTranscriber(context)
     @Volatile private var listening = false
+    @Volatile private var cancelRequested = false
+    @Volatile private var listenThread: Thread? = null
+    /** Set by the accessibility service; invoked on a confirmed match to pause WhatsApp playback. */
+    @Volatile var onMatchPause: (() -> Unit)? = null
+
+    init {
+        // Dismissing the overlay (tap-away / ✕) also cancels an in-progress listen.
+        overlay.onDismiss = { cancel("overlay dismissed") }
+    }
+
+    /** Abort an in-progress listen (called on pause, overlay-dismiss, etc.). Interrupts the worker so
+     *  it stops within a tick rather than running the full window on ambient noise. */
+    fun cancel(reason: String) {
+        if (!listening || cancelRequested) return
+        AppLog.i("[orchestrator] cancelling listen ($reason).")
+        cancelRequested = true
+        listenThread?.interrupt()
+    }
 
     fun onPlayTap(durationHintSec: Double?, timestamp: String?) {
         if (listening) { AppLog.i("[orchestrator] already listening — ignoring new tap."); return }
+        // Kick an incremental refresh so a JUST-ARRIVED note gets fingerprinted (+auto-transcribed)
+        // in the background; the streaming loop re-queries each tick, so it can match mid-listen.
+        indexer.loadOrBuild { AppLog.i(it) }
         AppLog.i("[orchestrator] play-tap -> start CONTINUOUS listening (early-stop).")
+        // Set state synchronously so a fast pause (cancel) that arrives before the worker starts isn't lost.
+        listening = true
+        cancelRequested = false
         overlay.showSpinner("Listening…")
         overlay.setInfo(durationHintSec, timestamp)
         worker.execute { runListen() }
     }
 
     private fun runListen() {
-        listening = true
+        // listening/cancelRequested are set synchronously in onPlayTap (race-free with a fast pause).
+        listenThread = Thread.currentThread()
         var usedMicFgs = false
         try {
+            if (cancelRequested) { overlay.dismiss(); return }
             val proj = ProjectionService.source
             val src: AudioWindowSource
             if (proj != null && proj.isSessionActive) {
@@ -81,7 +107,9 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
             var elapsed = 0.0
 
             while (true) {
+                if (cancelRequested) break
                 Thread.sleep(TICK_MS)
+                if (cancelRequested) break
                 val pcm = src.readSince(mark)
                 elapsed = pcm.size.toDouble() / SR
 
@@ -108,7 +136,7 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
                     else "listening %.1fs… (no match yet)".format(elapsed)
                 )
 
-                if (top != null && IndexConfig.confident(top, second, capFp.size, elapsed)) {
+                if (top != null && IndexConfig.confident(top, second)) {
                     if (top.fileId == lastWinner) streak++ else { streak = 1; lastWinner = top.fileId }
                     if (streak >= CONFIRM_TICKS) { finalizeMatch(top, elapsed); return }
                 } else {
@@ -122,10 +150,16 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
                     return
                 }
             }
-            overlay.setStatus("stopped (%.1fs) — no usable capture / index.".format(elapsed))
-            overlay.setTranscript("[no confident match]")
+            if (cancelRequested) {
+                AppLog.i("[orchestrator] listen cancelled — stopping capture, dismissing overlay.")
+                overlay.dismiss()
+            } else {
+                overlay.setStatus("stopped (%.1fs) — no usable capture / index.".format(elapsed))
+                overlay.setTranscript("[no confident match]")
+            }
         } catch (e: InterruptedException) {
-            // session torn down; ignore
+            AppLog.i("[orchestrator] listen interrupted (cancelled) — dismissing overlay.")
+            overlay.dismiss()
         } catch (t: Throwable) {
             // Catch Throwable (not just Exception) so an OutOfMemoryError etc. is contained here and
             // does NOT kill the shared process (which would take the accessibility service down with it).
@@ -133,6 +167,8 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
             try { overlay.setTranscript("[matching error — try again]") } catch (_: Throwable) {}
         } finally {
             if (usedMicFgs) MicCaptureService.stop(appContext) // tear down the mic FGS + AudioRecord
+            listenThread = null
+            Thread.interrupted() // clear any pending interrupt so the pooled worker thread is clean
             listening = false
         }
     }
@@ -152,7 +188,11 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
     private fun finalizeMatch(top: Scored, elapsed: Double) {
         AppLog.i("[orchestrator] ✅ CONFIDENT after %.1fs: ${top.name} aligned=${top.aligned} -> transcribe.".format(elapsed))
         val cand = toCandidate(top, withDuration = true)
-        overlay.setCandidates(listOf(cand), true)
+        overlay.setCandidates(listOf(cand), true) // show result + mark card sticky BEFORE the pause click
+        if (Toggles.pauseOnMatch) {
+            AppLog.i("[orchestrator] match confirmed — pausing WhatsApp playback.")
+            onMatchPause?.invoke() // pause click lands outside the overlay; sticky keeps the card up
+        }
 
         val cached = Transcripts.get(appContext).find(cand.file)
         val transcript: String

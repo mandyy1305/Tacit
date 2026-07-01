@@ -47,11 +47,13 @@ object IndexConfig {
     const val MAX_POSTINGS_PER_HASH = 800
     const val MAX_QUERY_EVENTS = 1_500_000 // 1.5M longs ≈ 12 MB ceiling
 
-    // ---- match policy (composite early-stop gate) ----
-    const val MARGIN_RATIO = 3.0
-    const val MIN_FRAC = 0.40         // top must be >= this fraction of capture hashes
-    const val BASE_FLOOR = 40.0       // absolute aligned floor at t=0…
-    const val FLOOR_PER_SEC = 25.0    // …growing with elapsed capture
+    // ---- match policy (early-stop gate) ----
+    // Calibrated for BOTH clean internal capture AND the noisier mic fallback: judge by how much the
+    // top dominates #2, plus a small absolute floor. Do NOT gate on fraction-of-capture-hashes or a
+    // time-growing floor — those were tuned for clean audio (~99% of hashes align) and are unreachable
+    // over the mic (only a few % align; aligned counts land in the tens–low-hundreds).
+    const val MARGIN_RATIO = 3.0      // top must beat #2 by this factor
+    const val MIN_ALIGNED = 30        // absolute floor (noise guard)
 
     fun pack(hash: Long, fileId: Int, time: Int): Long =
         ((hash and HASH_MASK) shl (FILEID_BITS + TIME_BITS)) or
@@ -77,16 +79,12 @@ object IndexConfig {
         return h
     }
 
-    /** Confident when the top has accumulated enough absolute evidence AND dominates #2 AND covers a
-     *  big fraction of the capture. The floor grows with elapsed capture so early ticks can't fire on
-     *  a couple of coincidental hits. */
-    fun confident(top: Scored?, second: Scored?, captureHashes: Int, elapsedSec: Double): Boolean {
-        if (top == null) return false
-        val floor = BASE_FLOOR + FLOOR_PER_SEC * elapsedSec
-        if (top.aligned < floor) return false
-        if (top.aligned < MARGIN_RATIO * maxOf(second?.aligned ?: 0, 1)) return false
-        if (captureHashes > 0 && top.aligned < MIN_FRAC * captureHashes) return false
-        return true
+    /** Confident when the top clears a small absolute floor AND dominates #2 by [MARGIN_RATIO]×.
+     *  Stability (not firing on a lucky tick) is enforced by the caller requiring CONFIRM_TICKS
+     *  consecutive ticks with the same winner. */
+    fun confident(top: Scored?, second: Scored?): Boolean {
+        if (top == null || top.aligned < MIN_ALIGNED) return false
+        return top.aligned >= MARGIN_RATIO * maxOf(second?.aligned ?: 0, 1)
     }
 }
 

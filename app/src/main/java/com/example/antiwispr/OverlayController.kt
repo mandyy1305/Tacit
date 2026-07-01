@@ -42,6 +42,13 @@ class OverlayController(private val ctx: Context) {
     private var bannerRow: LinearLayout? = null
     private var bannerText: TextView? = null
     @Volatile private var onShareAction: (() -> Unit)? = null
+    /** Invoked when the user dismisses the card (tap-away / ✕). Orchestrator uses it to cancel a listen. */
+    @Volatile var onDismiss: (() -> Unit)? = null
+    /** True once the user dismissed the card; blocks a still-running listen from re-creating it. */
+    @Volatile private var dismissed = false
+    /** When a result is showing, ignore outside-touch dismissal (incl. our own pause-on-match click);
+     *  only the ✕ or a new play-tap closes it. */
+    @Volatile private var sticky = false
 
     private fun dp(v: Int) = (v * density).roundToInt()
 
@@ -59,6 +66,8 @@ class OverlayController(private val ctx: Context) {
 
     fun showSpinner(message: String) = onMain {
         if (!canDraw()) return@onMain
+        dismissed = false // new listen session — allow the card again
+        sticky = false    // spinner/listening is dismissable by tapping away
         if (card == null) buildCard()
         spinner?.visibility = View.VISIBLE
         bannerRow?.visibility = View.GONE // default hidden; mic path re-shows it
@@ -70,7 +79,7 @@ class OverlayController(private val ctx: Context) {
 
     /** Warn that we're on the mic fallback (no screen share) and offer a Share-screen button. */
     fun showMicFallbackBanner(onShare: () -> Unit) = onMain {
-        if (!canDraw()) return@onMain
+        if (!canDraw() || dismissed) return@onMain
         if (card == null) buildCard()
         onShareAction = onShare
         bannerText?.text = "⚠ Screen not shared — using mic (lower accuracy)."
@@ -86,7 +95,7 @@ class OverlayController(private val ctx: Context) {
 
     /** Live one-line status during continuous listening (keeps the spinner spinning). */
     fun setStatus(text: String) = onMain {
-        if (!canDraw()) return@onMain
+        if (!canDraw() || dismissed) return@onMain // don't resurrect a card the user dismissed mid-listen
         if (card == null) buildCard()
         spinner?.visibility = View.VISIBLE
         candTv?.text = text
@@ -94,6 +103,7 @@ class OverlayController(private val ctx: Context) {
 
     fun setCandidates(candidates: List<CandidateFile>, confident: Boolean) = onMain {
         spinner?.visibility = View.GONE
+        sticky = true // a result is showing — outside touches (incl. the pause click) must not dismiss it
         if (candidates.isEmpty()) { candTv?.text = "match: (no candidates)"; return@onMain }
         val verdict = if (confident) "✅ match" else "⚠ uncertain"
         val header = "$verdict — compared ${candidates.size} candidate(s) (fp hits):"
@@ -109,9 +119,12 @@ class OverlayController(private val ctx: Context) {
     }
 
     fun dismiss() = onMain {
+        dismissed = true
+        sticky = false
         card?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         card = null
         AppLog.i("[overlay] result card dismissed.")
+        onDismiss?.invoke() // cancels an in-progress listen so it doesn't re-render the card
     }
 
     private fun buildCard() {
@@ -198,7 +211,9 @@ class OverlayController(private val ctx: Context) {
         }
         // tap-away to dismiss
         root.setOnTouchListener { _, ev ->
-            if (ev.action == MotionEvent.ACTION_OUTSIDE) { dismiss(); true } else false
+            // Tap-away dismisses only while listening; once a result is shown the card is sticky
+            // (so our pause-on-match click — which lands outside the overlay — can't nuke it).
+            if (ev.action == MotionEvent.ACTION_OUTSIDE) { if (!sticky) dismiss(); true } else false
         }
         try {
             wm.addView(root, lp)

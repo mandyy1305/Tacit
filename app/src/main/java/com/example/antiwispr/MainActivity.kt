@@ -111,6 +111,8 @@ class MainActivity : AppCompatActivity() {
 
         // Load any persisted index now and refresh incrementally in the background (cheap once built).
         IndexHolder.get(this).loadOrBuild { AppLog.i(it); ui.post { refreshStatus() } }
+        // Start watching for newly-arrived voice notes (idempotent; only starts once folders exist).
+        VoiceNoteWatcher.ensureStarted { IndexHolder.get(this).loadOrBuild { AppLog.i(it); ui.post { refreshStatus() } } }
     }
 
     private fun buildIndex() {
@@ -135,6 +137,8 @@ class MainActivity : AppCompatActivity() {
             logView.append(line + "\n")
             logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
         }
+        // Retry starting the watcher in case all-files access was granted after launch.
+        VoiceNoteWatcher.ensureStarted { IndexHolder.get(this).loadOrBuild { AppLog.i(it); ui.post { refreshStatus() } } }
         refreshStatus()
     }
 
@@ -202,6 +206,9 @@ class MainActivity : AppCompatActivity() {
         })
         root.addView(checkbox("Mic fallback when screen isn't shared", Toggles.micFallbackEnabled) {
             Toggles.micFallbackEnabled = it; AppLog.i("micFallbackEnabled = $it")
+        })
+        root.addView(checkbox("Pause playback when matched", Toggles.pauseOnMatch) {
+            Toggles.pauseOnMatch = it; AppLog.i("pauseOnMatch = $it")
         })
 
         root.addView(section("Log"))

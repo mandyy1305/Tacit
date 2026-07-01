@@ -21,4 +21,7 @@ object Toggles {
 
     /** When no screen-share session is active at play-tap, fall back to mic capture (lower accuracy). */
     @Volatile var micFallbackEnabled: Boolean = true
+
+    /** When a match is CONFIRMED, pause WhatsApp's playback (click the playing control). */
+    @Volatile var pauseOnMatch: Boolean = true
 }
