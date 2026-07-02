@@ -102,6 +102,18 @@ object WhisperModel {
         expected: Long,
         onProgress: (String) -> Unit,
         onBytes: (Long) -> Unit = {},
+    ) = ModelDownloads.fetch(url, dst, expected, "whisper", onProgress, onBytes)
+}
+
+/** Shared HTTP model downloader: tmp file → size check → atomic rename, 10%-step progress. */
+internal object ModelDownloads {
+    fun fetch(
+        url: String,
+        dst: File,
+        expected: Long,
+        tag: String,
+        onProgress: (String) -> Unit,
+        onBytes: (Long) -> Unit = {},
     ) {
         val tmp = File(dst.parentFile, dst.name + ".tmp")
         val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
@@ -120,7 +132,7 @@ object WhisperModel {
                         total += n
                         onBytes(total)
                         val pct = if (expected > 0) (total * 100 / expected).toInt() else -1
-                        if (pct != lastPct && pct % 10 == 0) { lastPct = pct; onProgress("[whisper] ${dst.name}: $pct%") }
+                        if (pct != lastPct && pct % 10 == 0) { lastPct = pct; onProgress("[$tag] ${dst.name}: $pct%") }
                     }
                 }
             }
@@ -149,10 +161,10 @@ class WhisperTranscriber(context: Context) : Transcriber {
     @Volatile private var builtLang: String? = null
     private val initLock = Any()
 
-    /** Build the recognizer for the current language; rebuild if the Hindi toggle changed. */
+    /** Build the recognizer once; language is always auto-detected. */
     private fun ensureRecognizer(): OfflineRecognizer? {
         if (!WhisperModel.isReady(appContext)) return null
-        val lang = if (Toggles.forceHindi) "hi" else "" // "" = auto-detect
+        val lang = "" // "" = auto-detect
         recognizer?.let { if (builtLang == lang) return it }
         synchronized(initLock) {
             recognizer?.let { if (builtLang == lang) return it }

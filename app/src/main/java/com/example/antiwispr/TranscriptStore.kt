@@ -20,7 +20,8 @@ data class StoredTranscript(
     val seq: Int,           // WhatsApp media sequence, -1 if unknown
     val durationSec: Double,
     val text: String,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val summary: String = ""  // raw LLM "SUMMARY:/ACTIONS:" text; "" = not generated (v2)
 )
 
 /**
@@ -31,7 +32,7 @@ data class StoredTranscript(
  */
 object Transcripts {
     private const val MAGIC = 0x41575458 // "AWTX"
-    private const val VERSION = 1
+    private const val VERSION = 2 // v2 adds the summary field; v1 stores load with summary=""
 
     @Volatile private var loaded = false
     private lateinit var file: File
@@ -60,6 +61,16 @@ object Transcripts {
     /** Cached transcript text for this file, or null. */
     @Synchronized fun find(f: File): String? = map[keyFor(f)]?.text
 
+    /** Full stored record for this file (transcript + summary), or null. */
+    @Synchronized fun entry(f: File): StoredTranscript? = map[keyFor(f)]
+
+    /** Attach/replace the LLM summary on an existing record. No-op if the record is gone. */
+    @Synchronized fun putSummary(key: String, summary: String) {
+        val t = map[key] ?: return
+        map[key] = t.copy(summary = summary)
+        save()
+    }
+
     @Synchronized fun put(f: File, text: String) {
         val p = VoiceNotes.parseWhatsAppName(f.name)
         map[keyFor(f)] = StoredTranscript(
@@ -68,6 +79,16 @@ object Transcripts {
             durationSec = -1.0, text = text, updatedAt = System.currentTimeMillis()
         )
         save()
+    }
+
+    /** Delete a stored transcript so the note gets re-transcribed on-demand next play. */
+    @Synchronized fun remove(key: String): Boolean {
+        val removed = map.remove(key) != null
+        if (removed) {
+            save()
+            AppLog.i("[transcripts] removed $key — will re-transcribe on next play.")
+        }
+        return removed
     }
 
     /** Case-insensitive substring search over transcript text, newest first. */
@@ -89,14 +110,18 @@ object Transcripts {
         if (crc.value != ByteBuffer.wrap(raw, raw.size - 8, 8).long) { AppLog.w("[transcripts] CRC mismatch — ignoring store."); return }
         try {
             val din = DataInputStream(ByteArrayInputStream(raw, 0, raw.size - 8))
-            if (din.readInt() != MAGIC || din.readInt() != VERSION) { AppLog.w("[transcripts] bad header — ignoring."); return }
+            if (din.readInt() != MAGIC) { AppLog.w("[transcripts] bad magic — ignoring."); return }
+            val version = din.readInt()
+            if (version !in 1..VERSION) { AppLog.w("[transcripts] unknown version $version — ignoring."); return }
             val n = din.readInt()
             repeat(n.coerceAtLeast(0)) {
                 val key = din.readUTF(); val path = din.readUTF(); val name = din.readUTF()
                 val waDate = din.readInt(); val seq = din.readInt(); val dur = din.readDouble()
                 val text = din.readUTF(); val updated = din.readLong()
-                map[key] = StoredTranscript(key, path, name, waDate, seq, dur, text, updated)
+                val summary = if (version >= 2) din.readUTF() else "" // v1 → migrate with no summary
+                map[key] = StoredTranscript(key, path, name, waDate, seq, dur, text, updated, summary)
             }
+            if (version < VERSION) AppLog.i("[transcripts] migrated store v$version → v$VERSION (${map.size} records).")
         } catch (e: Exception) {
             AppLog.e("[transcripts] parse failed: ${e.message} — starting empty."); map.clear()
         }
@@ -113,6 +138,7 @@ object Transcripts {
                 dos.writeUTF(t.key); dos.writeUTF(t.path); dos.writeUTF(t.name)
                 dos.writeInt(t.waDate); dos.writeInt(t.seq); dos.writeDouble(t.durationSec)
                 dos.writeUTF(t.text); dos.writeLong(t.updatedAt)
+                dos.writeUTF(t.summary)
             }
             dos.flush()
             DataOutputStream(fos).writeLong(crc.value)

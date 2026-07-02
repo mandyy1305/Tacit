@@ -49,6 +49,9 @@ dependencies {
     // On-device ASR: prebuilt sherpa-onnx Android AAR (bundles ONNX Runtime + JNI + Kotlin API).
     // Vendored at app/libs/sherpa-onnx.aar (k2-fsa release v1.13.3).
     implementation(files("libs/sherpa-onnx.aar"))
+    // On-device LLM for transcript summaries (MediaPipe LLM Inference; Qwen2.5-1.5B .task
+    // downloaded at runtime like the Whisper model).
+    implementation(libs.mediapipe.tasks.genai)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)
 

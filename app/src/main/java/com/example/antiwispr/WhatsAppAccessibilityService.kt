@@ -84,10 +84,6 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     }
 
     private fun handleClick(event: AccessibilityEvent) {
-        if (System.currentTimeMillis() < selfPauseUntilMs) {
-            AppLog.i("[a11y] ignoring click — it's the echo of our own pause-on-match tap.")
-            return
-        }
         val src = event.source
         if (src == null) {
             AppLog.w("[a11y] TYPE_VIEW_CLICKED but source node is null (not retrievable).")
@@ -103,6 +99,17 @@ class WhatsAppAccessibilityService : AccessibilityService() {
 
         val control = classifyControl(src)
         AppLog.i("[a11y] classify => $control")
+
+        // Echo suppression, SHAPE-matched: the echo of our own pause-on-match click always
+        // classifies as STOPPED (the control now reads "Play voice message"). A STARTED click
+        // inside the window is a REAL user tap and must pass — the old blanket time-window
+        // ignore swallowed the reflexive "play the next note" tap right after an auto-pause,
+        // making the overlay "not appear". Consume exactly one echo, then close the window.
+        if (System.currentTimeMillis() < selfPauseUntilMs && control == Control.STOPPED) {
+            selfPauseUntilMs = 0L
+            AppLog.i("[a11y] ignoring click — echo of our own pause-on-match tap (consumed).")
+            return
+        }
         when (control) {
             Control.NONE -> { AppLog.i("[a11y] not a voice-note control — ignoring, no overlay."); return }
             Control.STOPPED -> {

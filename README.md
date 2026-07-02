@@ -10,6 +10,12 @@ The transcript appears in a floating card right over the chat.
 
 UI is 100% Jetpack Compose ("Editorial Ink" design system — Fraunces + Inter, paper/ink/amber),
 with a guided onboarding flow, home dashboard, transcript search/reader, and settings.
+Transcripts can be deleted from the reader view to re-transcribe on-demand.
+
+**Summaries (optional):** an on-device LLM (Qwen2.5-1.5B-Instruct via MediaPipe LLM Inference,
+one-time ~1.6 GB download from `litert-community`) turns each transcript into a short summary
+plus action items, in the note's own language. Both the overlay card and the in-app reader have
+Summary | Transcript tabs; play-tap transcripts summarize automatically, older notes on first open.
 
 > Note: this reads WhatsApp's private data (accessibility + audio capture + file access). It's a
 > personal/sideload experiment, not a Play-Store-distributable app.

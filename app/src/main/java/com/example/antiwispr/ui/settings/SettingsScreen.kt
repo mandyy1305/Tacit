@@ -40,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -66,10 +67,11 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     var confirmRedownload by remember { mutableStateOf(false) }
+    var confirmRedownloadLlm by remember { mutableStateOf(false) }
     var showFolderReport by remember { mutableStateOf(false) }
     var devOpen by remember { mutableStateOf(false) }
 
-    Scaffold(containerColor = MaterialTheme.colorScheme.background) { pad ->
+    Scaffold(containerColor = Color.Transparent) { pad ->
         Column(
             Modifier
                 .padding(pad)
@@ -97,12 +99,6 @@ fun SettingsScreen(
                 Spacer(Modifier.height(16.dp))
                 SectionHeader("Transcription")
                 Spacer(Modifier.height(4.dp))
-                ToggleRow(
-                    "Force Hindi",
-                    "Best for Hindi-dominant chats. Off = auto-detect the language.",
-                    initial = Toggles.forceHindi,
-                ) { vm.setToggle(ToggleKey.ForceHindi, it) }
-
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -132,6 +128,52 @@ fun SettingsScreen(
                     ProgressCapsule(setup.modelProgress, setup.modelStatus)
                     Spacer(Modifier.height(10.dp))
                 }
+
+                Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
+                SectionHeader("Summaries")
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "Summary model",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            if (setup.llmReady) "Qwen 2.5 1.5B · on-device · ready"
+                            else setup.llmStatus.ifBlank { "not downloaded · 1.6 GB" },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (setup.llmReady) {
+                        GhostButton(
+                            "Re-download",
+                            onClick = { confirmRedownloadLlm = true },
+                            enabled = !setup.llmDownloading,
+                        )
+                    } else {
+                        GhostButton(
+                            "Download",
+                            onClick = { vm.downloadLlm() },
+                            enabled = !setup.llmDownloading,
+                        )
+                    }
+                }
+                if (setup.llmDownloading) {
+                    ProgressCapsule(setup.llmProgress, setup.llmStatus)
+                    Spacer(Modifier.height(10.dp))
+                }
+                Text(
+                    "Each note becomes a short brief with action items — generated entirely on this phone.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
 
                 Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
                 SectionHeader("Behaviour")
@@ -235,6 +277,31 @@ fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { confirmRedownload = false }) {
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        )
+    }
+
+    if (confirmRedownloadLlm) {
+        AlertDialog(
+            onDismissRequest = { confirmRedownloadLlm = false },
+            title = { Text("Re-download summary model?", style = MaterialTheme.typography.headlineSmall) },
+            text = {
+                Text(
+                    "The current file is deleted and ~1.6 GB is fetched again. " +
+                        "Summaries are unavailable until it finishes.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmRedownloadLlm = false; vm.redownloadLlm() }) {
+                    Text("Re-download", color = MaterialTheme.colorScheme.primary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRedownloadLlm = false }) {
                     Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },

@@ -30,11 +30,17 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
     private val appContext = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "orchestrator").apply { isDaemon = true } }
+    // Transcription/summary run OFF the listen worker so [listening] can release at match time:
+    // holding the tap gate through a 2-10s Whisper pass silently ate every play-tap in that
+    // window ("overlay doesn't appear"). Single thread — Whisper passes serialize naturally.
+    private val transcribeExec = Executors.newSingleThreadExecutor { r -> Thread(r, "transcriber").apply { isDaemon = true } }
     private val indexer = IndexHolder.get(context)
     private val transcriber: Transcriber = WhisperTranscriber(context)
     @Volatile private var listening = false
     @Volatile private var cancelRequested = false
     @Volatile private var listenThread: Thread? = null
+    /** Bumped per play-tap; a superseded session's late transcript/summary must not repaint the new card. */
+    @Volatile private var generation = 0
     /** Set by the accessibility service; invoked on a confirmed match to pause WhatsApp playback. */
     @Volatile var onMatchPause: (() -> Unit)? = null
 
@@ -61,6 +67,7 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         // Set state synchronously so a fast pause (cancel) that arrives before the worker starts isn't lost.
         listening = true
         cancelRequested = false
+        generation++
         overlay.showSpinner("Listening…")
         overlay.setInfo(durationHintSec, timestamp)
         worker.execute { runListen() }
@@ -138,7 +145,14 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
 
                 if (top != null && IndexConfig.confident(top, second)) {
                     if (top.fileId == lastWinner) streak++ else { streak = 1; lastWinner = top.fileId }
-                    if (streak >= CONFIRM_TICKS) { finalizeMatch(top, elapsed); return }
+                    if (streak >= CONFIRM_TICKS) {
+                        // A tap-away/cancel can land DURING this tick's compute (no sleep, no
+                        // interruption point). Without this check we'd auto-pause WhatsApp and
+                        // transcribe into a dismissed card — full pipeline, invisible overlay.
+                        if (cancelRequested) break
+                        finalizeMatch(top, elapsed)
+                        return
+                    }
                 } else {
                     streak = 0
                 }
@@ -189,23 +203,59 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         AppLog.i("[orchestrator] ✅ CONFIDENT after %.1fs: ${top.name} aligned=${top.aligned} -> transcribe.".format(elapsed))
         val cand = toCandidate(top, withDuration = true)
         overlay.setCandidates(listOf(cand), true) // show result + mark card sticky BEFORE the pause click
-        if (Toggles.pauseOnMatch) {
+        if (Toggles.pauseOnMatch && !cancelRequested) {
             AppLog.i("[orchestrator] match confirmed — pausing WhatsApp playback.")
             onMatchPause?.invoke() // pause click lands outside the overlay; sticky keeps the card up
         }
 
-        val cached = Transcripts.get(appContext).find(cand.file)
+        // Capture is over. Hand transcription/summary to their own thread and return, so the
+        // listen worker's `finally` releases [listening] NOW — the next play-tap starts a fresh
+        // session immediately instead of being silently ignored for the whole Whisper pass.
+        val gen = generation
+        transcribeExec.execute { resolveTranscriptAndSummary(cand, gen) }
+    }
+
+    /** Runs on [transcribeExec]. [gen] guards a superseded session from repainting the new card. */
+    private fun resolveTranscriptAndSummary(cand: CandidateFile, gen: Int) {
+        val live = { gen == generation }
         val transcript: String
+        val cached = Transcripts.get(appContext).find(cand.file)
         if (cached != null) {
             AppLog.i("[transcripts] cache hit for ${cand.name} — instant.")
             transcript = cached
         } else {
-            overlay.setTranscript("transcribing…") // real ASR takes a few seconds (+ one-time model load)
-            transcript = transcriber.transcribe(cand.file)
+            if (live()) overlay.setTranscript("transcribing…") // real ASR takes a few seconds (+ one-time model load)
+            transcript = try {
+                transcriber.transcribe(cand.file)
+            } catch (t: Throwable) {
+                AppLog.e("[orchestrator] transcribe threw: ${t.message}", t)
+                "[transcription error: ${t.message}]"
+            }
             if (!transcript.startsWith("[")) Transcripts.get(appContext).put(cand.file, transcript) // don't cache errors/placeholders
         }
         AppLog.i("[orchestrator] transcript => $transcript")
+        if (!live()) {
+            AppLog.i("[orchestrator] session superseded by a newer play-tap — transcript cached, card untouched.")
+            return
+        }
         overlay.setTranscript(transcript)
+
+        // Summary tab: cached → instant; else generate on-device (auto for the play-tap flow).
+        if (!transcript.startsWith("[")) {
+            val cachedSummary = Transcripts.get(appContext).entry(cand.file)?.summary.orEmpty()
+            when {
+                cachedSummary.isNotEmpty() -> overlay.setSummaryReady(cachedSummary)
+                LlmModel.isReady(appContext) -> {
+                    overlay.setSummaryGenerating()
+                    val key = Transcripts.keyFor(cand.file)
+                    Summarizer.request(appContext, key, transcript) { raw ->
+                        if (!raw.startsWith("[")) Transcripts.get(appContext).putSummary(key, raw)
+                        if (gen == generation) overlay.setSummaryReady(raw)
+                    }
+                }
+                else -> overlay.setSummaryUnavailable()
+            }
+        }
     }
 
     private fun toCandidate(s: Scored, withDuration: Boolean = false): CandidateFile {

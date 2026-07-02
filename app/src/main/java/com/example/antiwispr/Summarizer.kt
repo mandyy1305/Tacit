@@ -1,0 +1,207 @@
+package com.example.antiwispr
+
+import android.content.Context
+import com.google.mediapipe.tasks.genai.llminference.LlmInference
+import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
+import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+
+/**
+ * On-device transcript summaries via MediaPipe LLM Inference (Qwen2.5-1.5B-Instruct, q8 .task).
+ *
+ * [LlmModel] owns the model file (downloaded once to filesDir/llm, ~1.6 GB) + download state,
+ * mirroring [WhisperModel]. [Summarizer] lazily builds ONE LlmInference engine and serves
+ * summary requests on a single background thread; results are raw "SUMMARY:/ACTIONS:" text
+ * cached in [Transcripts] and parsed for display with [parseSummary].
+ */
+object LlmModel {
+
+    private const val BASE = "https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/main"
+    // Exact size verified via HEAD request (integrity check, same idiom as WhisperModel).
+    val MODEL = WhisperModel.ModelFile("Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.task", 1_598_556_720L)
+
+    @Volatile var status: String = "not downloaded"
+        private set
+    @Volatile var downloading: Boolean = false
+        private set
+
+    /** Total bytes of the model (for the UI progress bar). */
+    val totalBytes: Long get() = MODEL.size
+
+    /** Bytes on disk so far. Live during download. */
+    @Volatile var downloadedBytes: Long = 0L
+        private set
+
+    private val exec = Executors.newSingleThreadExecutor { r -> Thread(r, "llm-dl").apply { isDaemon = true } }
+
+    fun dir(context: Context): File = File(context.filesDir, "llm").apply { mkdirs() }
+    fun path(context: Context): String = File(dir(context), MODEL.name).absolutePath
+
+    fun isReady(context: Context): Boolean =
+        File(dir(context), MODEL.name).let { it.exists() && it.length() == MODEL.size }
+
+    fun download(context: Context, onProgress: (String) -> Unit) {
+        if (downloading) { onProgress("[llm] already downloading…"); return }
+        if (isReady(context)) { status = "ready"; onProgress("[llm] model already present (ready)."); return }
+        exec.execute {
+            downloading = true
+            try {
+                val dst = File(dir(context), MODEL.name)
+                status = "downloading ${MODEL.name}"
+                onProgress("[llm] downloading summary model (${MODEL.size / 1_000_000} MB)…")
+                ModelDownloads.fetch("$BASE/${MODEL.name}", dst, MODEL.size, "llm", onProgress) {
+                    downloadedBytes = it
+                }
+                val ok = isReady(context)
+                status = if (ok) "ready" else "incomplete"
+                onProgress(if (ok) "[llm] ✅ summary model ready." else "[llm] ⚠ download incomplete.")
+            } catch (e: Exception) {
+                status = "download failed: ${e.message}"
+                AppLog.e("[llm] download failed: ${e.message}", e)
+            } finally {
+                downloading = false
+            }
+        }
+    }
+
+    /** Remove the model so it can be re-downloaded. No-op while a download runs. */
+    fun delete(context: Context) {
+        if (downloading) return
+        dir(context).listFiles()?.forEach { it.delete() }
+        downloadedBytes = 0L
+        status = "not downloaded"
+        Summarizer.releaseEngine()
+        AppLog.i("[llm] summary model deleted.")
+    }
+}
+
+/** Parsed pieces of a raw "SUMMARY:/ACTIONS:" summary for display. */
+data class SummaryParts(val summary: String, val actions: List<String>)
+
+/** Tolerant parser: missing headers → whole text as summary, no actions. */
+fun parseSummary(raw: String): SummaryParts {
+    val text = raw.trim()
+    val summaryIdx = text.indexOf("SUMMARY:", ignoreCase = true)
+    val actionsIdx = text.indexOf("ACTIONS:", ignoreCase = true)
+    if (summaryIdx < 0 && actionsIdx < 0) return SummaryParts(text, emptyList())
+
+    val summary = when {
+        summaryIdx < 0 -> text.substring(0, if (actionsIdx > 0) actionsIdx else text.length)
+        actionsIdx > summaryIdx -> text.substring(summaryIdx + 8, actionsIdx)
+        else -> text.substring(summaryIdx + 8)
+    }.trim()
+
+    val actions = if (actionsIdx < 0) emptyList() else
+        text.substring(actionsIdx + 8).lines()
+            .map { it.trim().trimStart('-', '•', '*').trim() }
+            .filter { it.isNotEmpty() && !it.equals("none", ignoreCase = true) }
+
+    return SummaryParts(summary.ifEmpty { text }, actions)
+}
+
+object Summarizer {
+
+    private const val MAX_INPUT_CHARS = 6000
+    private const val MAX_TOKENS = 4096 // matches the ekv4096 model variant
+
+    private val exec = Executors.newSingleThreadExecutor { r -> Thread(r, "summarizer").apply { isDaemon = true } }
+    @Volatile private var engine: LlmInference? = null
+    private val engineLock = Any()
+    private val inFlight = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Queue a summary for [transcript]; [onDone] receives the RAW result text (bracket-prefixed
+     * "[…]" = error, same convention as transcription) on the summarizer thread. Duplicate
+     * requests for a key already in flight are dropped.
+     */
+    fun request(context: Context, key: String, transcript: String, onDone: (String) -> Unit) {
+        if (!inFlight.add(key)) { AppLog.i("[summarizer] already summarizing this note — skipping."); return }
+        val appContext = context.applicationContext
+        exec.execute {
+            val result = try {
+                generate(appContext, transcript)
+            } catch (t: Throwable) {
+                // Contain Throwable: a native OOM in the LLM must not kill the shared process.
+                AppLog.e("[summarizer] failed: ${t.javaClass.simpleName}: ${t.message}", t)
+                "[summary failed: ${t.message}]"
+            } finally {
+                inFlight.remove(key)
+            }
+            onDone(result)
+        }
+    }
+
+    /** Free the engine (model deleted / re-downloaded). Safe to call anytime. */
+    fun releaseEngine() {
+        synchronized(engineLock) {
+            engine?.let { try { it.close() } catch (_: Exception) {} }
+            engine = null
+        }
+    }
+
+    private fun generate(context: Context, transcript: String): String {
+        if (!LlmModel.isReady(context)) return "[summary model not downloaded]"
+        val eng = ensureEngine(context) ?: return "[summarizer init failed]"
+        val text = transcript.take(MAX_INPUT_CHARS)
+        val t0 = System.currentTimeMillis()
+        // A fresh session per request: no context bleed between notes; low temperature for
+        // factual extraction.
+        val session = LlmInferenceSession.createFromOptions(
+            eng,
+            LlmInferenceSession.LlmInferenceSessionOptions.builder()
+                .setTopK(40)
+                .setTemperature(0.3f)
+                .build()
+        )
+        return try {
+            session.addQueryChunk(buildPrompt(text))
+            val out = session.generateResponse().trim()
+            AppLog.i("[summarizer] generated ${out.length} chars in ${System.currentTimeMillis() - t0} ms.")
+            if (out.isEmpty()) "[summary empty — try regenerating]" else out
+        } finally {
+            try { session.close() } catch (_: Exception) {}
+        }
+    }
+
+    private fun ensureEngine(context: Context): LlmInference? {
+        engine?.let { return it }
+        synchronized(engineLock) {
+            engine?.let { return it }
+            AppLog.i("[summarizer] loading LLM engine (Qwen2.5-1.5B q8)…")
+            val t0 = System.currentTimeMillis()
+            return try {
+                val e = LlmInference.createFromOptions(
+                    context.applicationContext,
+                    LlmInference.LlmInferenceOptions.builder()
+                        .setModelPath(LlmModel.path(context))
+                        .setMaxTokens(MAX_TOKENS)
+                        .build()
+                )
+                engine = e
+                AppLog.i("[summarizer] engine ready in ${System.currentTimeMillis() - t0} ms.")
+                e
+            } catch (t: Throwable) {
+                AppLog.e("[summarizer] engine init failed: ${t.message}", t)
+                null
+            }
+        }
+    }
+
+    private fun buildPrompt(transcript: String): String = """
+        You summarize WhatsApp voice-note transcripts. Reply in the SAME language and style as
+        the transcript (if it mixes Hindi and English, do the same). Be brief and factual —
+        never invent details. Use EXACTLY this format:
+        SUMMARY: <2-3 short sentences>
+        ACTIONS:
+        - <one action item per line, keeping quantities, names, amounts and dates as spoken>
+        If there is nothing to act on, write exactly:
+        ACTIONS:
+        - none
+
+        Transcript:
+        ${'"'}${'"'}${'"'}
+        $transcript
+        ${'"'}${'"'}${'"'}
+    """.trimIndent()
+}

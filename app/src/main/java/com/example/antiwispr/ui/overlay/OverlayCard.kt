@@ -47,7 +47,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,7 +62,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -81,7 +82,7 @@ internal object OverlayPalette {
     val accent = Color(0xFFD97B45)     // burnt amber (dark-theme tone)
     val accentDeep = Color(0xFFC4622D)
     val hairline = Color(0x1FECE6DC)   // cream @ 12% border
-    val sage = Color(0xFFA6B899)       // ok/success
+    val mint = Color(0xFFA6B899)       // ok/success (muted sage)
 }
 
 /** Dark-locked theme wrapper so typography/shape tokens resolve inside the overlay window. */
@@ -95,7 +96,7 @@ fun TacitOverlayCard(
     state: OverlayUiState,
     onClose: () -> Unit,
     onShare: () -> Unit,
-    onCopy: () -> Unit,
+    onCopy: (String) -> Unit,
     onExitFinished: () -> Unit,
 ) {
     val enterState = remember { MutableTransitionState(false) }
@@ -337,7 +338,7 @@ private fun MatchLine(state: OverlayUiState, animateBadge: Boolean) {
                 "MATCHED",
                 fontFamily = Inter, fontWeight = FontWeight.SemiBold,
                 fontSize = 10.sp, letterSpacing = 1.5.sp,
-                color = OverlayPalette.sage,
+                color = OverlayPalette.mint,
             )
             Text(
                 state.match?.meta ?: "Voice note",
@@ -399,41 +400,149 @@ private fun TranscribingShimmer() {
 }
 
 @Composable
-private fun TranscriptBody(state: OverlayUiState, onCopy: () -> Unit) {
+private fun TranscriptBody(state: OverlayUiState, onCopy: (String) -> Unit) {
+    // 0 = Summary (the point of the product), 1 = Transcript.
+    var tab by remember { mutableIntStateOf(0) }
     Column {
         MatchLine(state, animateBadge = false)
         Spacer(Modifier.height(12.dp))
-        Box(
-            Modifier
-                .weight(1f, fill = false)
-                .verticalScroll(rememberScrollState())
-        ) {
-            Text(
-                state.transcript.orEmpty(),
-                fontFamily = Inter, fontSize = 15.sp, lineHeight = 23.sp,
-                color = OverlayPalette.ink,
-            )
+        OverlayTabs(tab, onSelect = { tab = it })
+        Spacer(Modifier.height(10.dp))
+        // Fade only, size snaps (`using null`) — the no-window-resize-animation rule.
+        AnimatedContent(
+            targetState = tab,
+            modifier = Modifier.weight(1f, fill = false),
+            transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(90)) using null },
+            label = "tab",
+        ) { t ->
+            Box(Modifier.verticalScroll(rememberScrollState())) {
+                if (t == 0) SummaryPane(state) else TranscriptPane(state)
+            }
         }
         Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Spacer(Modifier.weight(1f))
+        val copyText = if (tab == 0) state.summaryRaw.orEmpty() else state.transcript.orEmpty()
+        if (copyText.isNotBlank()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.weight(1f))
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onCopy(copyText) }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                ) {
+                    AnimatedContent(
+                        targetState = state.copied,
+                        transitionSpec = { fadeIn(tween(120)) togetherWith fadeOut(tween(80)) },
+                        label = "copy",
+                    ) { copied ->
+                        Text(
+                            if (copied) "COPIED ✓" else "COPY",
+                            fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp, letterSpacing = 1.sp,
+                            color = if (copied) OverlayPalette.mint else OverlayPalette.accent,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OverlayTabs(selected: Int, onSelect: (Int) -> Unit) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(OverlayPalette.ink.copy(alpha = 0.06f))
+            .padding(3.dp)
+    ) {
+        listOf("Summary", "Transcript").forEachIndexed { i, label ->
+            val active = i == selected
             Box(
                 Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onCopy)
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                    .background(if (active) OverlayPalette.accentDeep else Color.Transparent)
+                    .clickable { onSelect(i) }
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
             ) {
-                AnimatedContent(
-                    targetState = state.copied,
-                    transitionSpec = { fadeIn(tween(120)) togetherWith fadeOut(tween(80)) },
-                    label = "copy",
-                ) { copied ->
+                Text(
+                    label,
+                    fontFamily = Inter,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                    fontSize = 12.sp,
+                    color = if (active) Color(0xFFFFF3E9) else OverlayPalette.inkMuted,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TranscriptPane(state: OverlayUiState) {
+    Text(
+        state.transcript.orEmpty(),
+        fontFamily = Inter, fontSize = 15.sp, lineHeight = 23.sp,
+        color = OverlayPalette.ink,
+    )
+}
+
+@Composable
+private fun SummaryPane(state: OverlayUiState) {
+    when (state.summaryState) {
+        SummaryState.GENERATING, SummaryState.NONE -> Column {
+            Text(
+                "Summarizing on this phone…",
+                fontFamily = Inter, fontSize = 12.sp,
+                color = OverlayPalette.inkFaint,
+            )
+            Spacer(Modifier.height(8.dp))
+            TranscribingShimmer()
+        }
+        SummaryState.UNAVAILABLE -> Text(
+            "Summaries need a one-time model download — open TACIT → Settings → Summaries.",
+            fontFamily = Inter, fontSize = 13.sp,
+            color = OverlayPalette.inkMuted,
+        )
+        SummaryState.READY -> {
+            val raw = state.summaryRaw.orEmpty()
+            if (raw.startsWith("[")) {
+                Text(
+                    humanizeNotice(raw),
+                    fontFamily = Inter, fontSize = 13.sp,
+                    color = OverlayPalette.inkMuted,
+                )
+            } else {
+                val parts = remember(raw) { com.example.antiwispr.parseSummary(raw) }
+                Column {
                     Text(
-                        if (copied) "COPIED ✓" else "COPY",
-                        fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-                        fontSize = 12.sp, letterSpacing = 1.sp,
-                        color = if (copied) OverlayPalette.sage else OverlayPalette.accent,
+                        parts.summary,
+                        fontFamily = Inter, fontSize = 15.sp, lineHeight = 23.sp,
+                        color = OverlayPalette.ink,
                     )
+                    if (parts.actions.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "ACTIONS",
+                            fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+                            fontSize = 10.sp, letterSpacing = 1.5.sp,
+                            color = OverlayPalette.accent,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        parts.actions.forEach { action ->
+                            Row(Modifier.padding(vertical = 2.dp)) {
+                                Text(
+                                    "–  ",
+                                    fontFamily = Inter, fontSize = 14.sp, lineHeight = 21.sp,
+                                    color = OverlayPalette.accent,
+                                )
+                                Text(
+                                    action,
+                                    fontFamily = Inter, fontSize = 14.sp, lineHeight = 21.sp,
+                                    color = OverlayPalette.ink,
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -461,7 +570,7 @@ private fun NoMatchBody() {
 private fun NoticeBody(state: OverlayUiState) {
     Text(
         state.notice.orEmpty(),
-        fontFamily = Inter, fontSize = 13.sp, fontStyle = FontStyle.Italic,
+        fontFamily = Inter, fontSize = 13.sp,
         color = OverlayPalette.inkMuted,
     )
 }

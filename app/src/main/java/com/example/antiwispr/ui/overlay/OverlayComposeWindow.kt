@@ -53,6 +53,19 @@ class OverlayComposeWindow(
             }
             return super.dispatchTouchEvent(ev)
         }
+
+        override fun onDetachedFromWindow() {
+            super.onDetachedFromWindow()
+            // Self-heal: if the system tore this window down without remove() being called,
+            // clearing `host` here lets the next update rebuild instead of wedging the
+            // overlay invisibly (isShowing would stay true forever).
+            if (host === this) {
+                AppLog.w("[overlay] window detached unexpectedly — will rebuild on next update.")
+                owner?.onRemoved()
+                host = null
+                owner = null
+            }
+        }
     }
 
     private val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -93,10 +106,13 @@ class OverlayComposeWindow(
 
     /** Main thread only. Idempotent. */
     fun remove() {
-        host?.let { try { wm.removeView(it) } catch (_: Exception) {} }
-        owner?.onRemoved()
+        // Null the fields BEFORE removeView: its synchronous detach would otherwise trip
+        // HostFrame's unexpected-detach self-heal and log a false alarm.
+        val h = host
         host = null
+        owner?.onRemoved()
         owner = null
+        h?.let { try { wm.removeView(it) } catch (_: Exception) {} }
     }
 
     private fun layoutParams() = WindowManager.LayoutParams(

@@ -38,14 +38,12 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.example.antiwispr.StoredTranscript
 import com.example.antiwispr.Transcripts
 import com.example.antiwispr.ui.components.TranscriptCard
 import com.example.antiwispr.ui.theme.Dimens
-import com.example.antiwispr.ui.theme.Fraunces
 
 /**
  * Live transcript search. Parity with the old SearchActivity: >= 2 characters,
@@ -68,7 +66,7 @@ fun SearchScreen(
         else Transcripts.get(context).search(trimmed).take(100)
     }
 
-    Scaffold(containerColor = MaterialTheme.colorScheme.background) { pad ->
+    Scaffold(containerColor = Color.Transparent) { pad ->
         Column(
             Modifier
                 .padding(pad)
@@ -95,9 +93,7 @@ fun SearchScreen(
                     placeholder = {
                         Text(
                             "Search transcripts…",
-                            style = MaterialTheme.typography.headlineSmall.copy(
-                                fontFamily = Fraunces, fontStyle = FontStyle.Italic
-                            ),
+                            style = MaterialTheme.typography.headlineSmall,
                             color = MaterialTheme.colorScheme.outline,
                         )
                     },

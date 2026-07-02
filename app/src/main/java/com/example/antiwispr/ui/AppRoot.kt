@@ -46,6 +46,7 @@ class SetupActions(
     val requestNotifications: () -> Unit,
     val openAccessibility: () -> Unit,
     val downloadModel: () -> Unit,
+    val downloadLlm: () -> Unit,
     val buildIndex: () -> Unit,
     val startSession: () -> Unit,
     val stopSession: () -> Unit,
@@ -108,6 +109,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 settingsReturnLauncher.launch(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             },
             downloadModel = { vm.downloadModel() },
+            downloadLlm = { vm.downloadLlm() },
             buildIndex = { vm.buildIndex() },
             startSession = {
                 when {
@@ -186,6 +188,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
             TranscriptDetailScreen(
                 transcript = vm.selectedTranscript,
                 onBack = { nav.popBackStack() },
+                onDelete = { vm.deleteTranscript(it) }, // screen pops itself via the null guard
+                onOpenSettings = { nav.navigate("settings") },
             )
         }
         composable("settings") {

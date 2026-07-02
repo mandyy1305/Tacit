@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import com.example.antiwispr.ui.overlay.OverlayComposeWindow
 import com.example.antiwispr.ui.overlay.OverlayPhase
 import com.example.antiwispr.ui.overlay.OverlayUiState
+import com.example.antiwispr.ui.overlay.SummaryState
 import com.example.antiwispr.ui.overlay.TacitOverlayCard
 import com.example.antiwispr.ui.overlay.TacitOverlayTheme
 import com.example.antiwispr.ui.overlay.humanizeNotice
@@ -42,6 +43,14 @@ class OverlayController(private val ctx: Context) {
     @Volatile private var dismissed = false
     /** When a result is showing, ignore outside-touch dismissal (incl. our own pause-on-match click). */
     @Volatile private var sticky = false
+    /**
+     * Monotonic listen-session id, bumped by every showSpinner. A cancelled listen's worker
+     * thread calls dismiss() asynchronously; if a NEW play-tap's showSpinner wins the race to
+     * the main thread, that stale dismiss must not kill the new card (it would set [dismissed]
+     * and silently drop every update of the new session — overlay never appears while the
+     * pipeline runs to completion). Captured at call time, verified on the main thread.
+     */
+    @Volatile private var session = 0
 
     private var removeFallback: Runnable? = null
 
@@ -55,21 +64,36 @@ class OverlayController(private val ctx: Context) {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post(block)
     }
 
+    /** Common guard for update calls; LOGS what it drops so a suppressed card is visible in the log. */
+    private fun dropUpdate(what: String): Boolean {
+        if (!canDraw()) return true
+        if (dismissed) {
+            AppLog.i("[overlay] $what dropped — card dismissed (session $session).")
+            return true
+        }
+        return false
+    }
+
     // ---- public API (frozen) ------------------------------------------------------
 
     fun showSpinner(message: String) = onMain {
         if (!canDraw()) return@onMain
-        dismissed = false // new listen session — allow the card again
+        session++         // new listen session — stale dismisses from older sessions are void
+        dismissed = false // allow the card again
         sticky = false    // listening is dismissable by tapping away
         cancelRemoveFallback()
-        ensureWindow()
+        // Fresh window every session. Reusing a window that the system silently killed (or
+        // whose composition is mid-teardown) wedges the overlay invisibly for every later
+        // session; a removeView+addView per play-tap is trivial and makes that impossible.
+        window?.remove()
         state.value = OverlayUiState(visible = true, phase = OverlayPhase.LISTENING, statusLine = message)
-        AppLog.i("[overlay] showing result card: \"$message\"")
+        ensureWindow()
+        AppLog.i("[overlay] showing result card: \"$message\" (session $session)")
     }
 
     /** Warn that we're on the mic fallback (no screen share) and offer a Share-screen button. */
     fun showMicFallbackBanner(onShare: () -> Unit) = onMain {
-        if (!canDraw() || dismissed) return@onMain
+        if (dropUpdate("mic banner")) return@onMain
         ensureWindow()
         onShareAction = onShare
         state.value = state.value.copy(visible = true, micBanner = true)
@@ -85,7 +109,7 @@ class OverlayController(private val ctx: Context) {
 
     /** Live one-line status during continuous listening. */
     fun setStatus(text: String) = onMain {
-        if (!canDraw() || dismissed) return@onMain // never resurrect a card the user dismissed mid-listen
+        if (dropUpdate("status")) return@onMain // never resurrect a card the user dismissed mid-listen
         ensureWindow()
         val info = interpretStatus(text)
         state.value = state.value.copy(
@@ -96,29 +120,70 @@ class OverlayController(private val ctx: Context) {
         )
     }
 
-    fun setCandidates(candidates: List<CandidateFile>, confident: Boolean) = onMain {
-        sticky = true // result showing — outside touches (incl. the pause click) must not dismiss it
-        state.value = state.value.copy(
-            phase = if (confident) OverlayPhase.MATCHED else OverlayPhase.NO_MATCH,
-            match = candidates.firstOrNull()?.toMatchInfo(),
-        )
-    }
-
-    fun setTranscript(text: String) = onMain {
-        state.value = when {
-            text.startsWith("transcribing") -> state.value.copy(phase = OverlayPhase.TRANSCRIBING)
-            text.startsWith("[") -> state.value.copy(phase = OverlayPhase.NOTICE, notice = humanizeNotice(text))
-            else -> state.value.copy(phase = OverlayPhase.TRANSCRIPT, transcript = text, copied = false)
+    fun setCandidates(candidates: List<CandidateFile>, confident: Boolean) {
+        // Sticky must flip SYNCHRONOUSLY on the calling (worker) thread. If it only flipped
+        // inside the posted block, a stray outside-touch in the hop between "match confirmed"
+        // and the post landing would tap-away-dismiss the card while finalizeMatch runs to
+        // completion — auto-pause + transcript with no overlay ever shown.
+        sticky = true
+        onMain {
+            if (dropUpdate("match result")) return@onMain
+            ensureWindow() // a result must never land on a missing window — recreate if needed
+            state.value = state.value.copy(
+                visible = true,
+                phase = if (confident) OverlayPhase.MATCHED else OverlayPhase.NO_MATCH,
+                match = candidates.firstOrNull()?.toMatchInfo(),
+            )
         }
     }
 
-    fun dismiss() = onMain {
-        dismissed = true
-        sticky = false
-        state.value = state.value.copy(visible = false) // plays the exit transition
-        AppLog.i("[overlay] result card dismissed.")
-        onDismiss?.invoke() // synchronous — cancels an in-progress listen immediately
-        scheduleRemoveFallback()
+    fun setTranscript(text: String) = onMain {
+        if (dropUpdate("transcript")) return@onMain
+        ensureWindow()
+        state.value = when {
+            text.startsWith("transcribing") -> state.value.copy(visible = true, phase = OverlayPhase.TRANSCRIBING)
+            text.startsWith("[") -> state.value.copy(visible = true, phase = OverlayPhase.NOTICE, notice = humanizeNotice(text))
+            else -> state.value.copy(visible = true, phase = OverlayPhase.TRANSCRIPT, transcript = text, copied = false)
+        }
+    }
+
+    /** Summary tab: generation started (shimmer). */
+    fun setSummaryGenerating() = onMain {
+        if (dropUpdate("summary(generating)")) return@onMain
+        ensureWindow()
+        state.value = state.value.copy(summaryState = SummaryState.GENERATING)
+    }
+
+    /** Summary tab: raw "SUMMARY:/ACTIONS:" text (bracket-prefixed = error, shown as-is). */
+    fun setSummaryReady(raw: String) = onMain {
+        if (dropUpdate("summary")) return@onMain
+        ensureWindow()
+        state.value = state.value.copy(summaryState = SummaryState.READY, summaryRaw = raw)
+    }
+
+    /** Summary tab: model not downloaded — show the settings hint. */
+    fun setSummaryUnavailable() = onMain {
+        if (dropUpdate("summary(unavailable)")) return@onMain
+        ensureWindow()
+        state.value = state.value.copy(summaryState = SummaryState.UNAVAILABLE)
+    }
+
+    fun dismiss() {
+        val issuedFor = session // capture on the CALLING thread, before marshalling
+        onMain {
+            if (issuedFor != session) {
+                // A newer showSpinner superseded the session this dismiss was meant for
+                // (e.g. a cancelled listen's worker racing the next play-tap). Ignore it.
+                AppLog.i("[overlay] stale dismiss (session $issuedFor < $session) — ignored.")
+                return@onMain
+            }
+            dismissed = true
+            sticky = false
+            state.value = state.value.copy(visible = false) // plays the exit transition
+            AppLog.i("[overlay] result card dismissed.")
+            onDismiss?.invoke() // synchronous — cancels an in-progress listen immediately
+            scheduleRemoveFallback()
+        }
     }
 
     // ---- internals ------------------------------------------------------------------
@@ -132,7 +197,7 @@ class OverlayController(private val ctx: Context) {
                         state = state.value,
                         onClose = { dismiss() },
                         onShare = { onShareAction?.invoke() },
-                        onCopy = { copyTranscript() },
+                        onCopy = { text -> copyText(text) },
                         onExitFinished = { removeWindow() },
                     )
                 }
@@ -158,10 +223,10 @@ class OverlayController(private val ctx: Context) {
         removeFallback = null
     }
 
-    private fun copyTranscript() {
-        val text = state.value.transcript ?: return
+    private fun copyText(text: String) {
+        if (text.isBlank()) return
         ctx.getSystemService(ClipboardManager::class.java)
-            ?.setPrimaryClip(ClipData.newPlainText("Tacit transcript", text))
+            ?.setPrimaryClip(ClipData.newPlainText("Tacit note", text))
         state.value = state.value.copy(copied = true)
         main.postDelayed({ state.value = state.value.copy(copied = false) }, 1500)
     }

@@ -36,6 +36,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.antiwispr.AppLog
@@ -74,7 +75,7 @@ fun LogScreen(onBack: () -> Unit) {
         if (atBottom && lines.isNotEmpty()) listState.scrollToItem(lines.size - 1)
     }
 
-    Scaffold(containerColor = MaterialTheme.colorScheme.background) { pad ->
+    Scaffold(containerColor = Color.Transparent) { pad ->
         Box(
             Modifier
                 .padding(pad)

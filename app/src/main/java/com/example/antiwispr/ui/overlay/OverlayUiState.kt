@@ -7,6 +7,8 @@ import com.example.antiwispr.ui.components.waDateLabel
 
 enum class OverlayPhase { LISTENING, MATCHED, TRANSCRIBING, TRANSCRIPT, NO_MATCH, NOTICE }
 
+enum class SummaryState { NONE, GENERATING, READY, UNAVAILABLE }
+
 /** Human-facing description of the matched note: "30 Jun · 0:42" (or "Voice note"). */
 data class MatchInfo(val meta: String)
 
@@ -20,6 +22,8 @@ data class OverlayUiState(
     val match: MatchInfo? = null,        // survives MATCHED → TRANSCRIBING → TRANSCRIPT
     val transcript: String? = null,
     val notice: String? = null,          // humanized bracket-message ("[no confident match …]")
+    val summaryState: SummaryState = SummaryState.NONE,
+    val summaryRaw: String? = null,      // raw "SUMMARY:/ACTIONS:" text; parsed at render time
     val copied: Boolean = false,
 )
 

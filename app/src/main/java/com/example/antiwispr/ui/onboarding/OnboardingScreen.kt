@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
@@ -53,7 +54,7 @@ import com.example.antiwispr.ui.theme.Dimens
 import com.example.antiwispr.ui.theme.WordmarkStyle
 import kotlinx.coroutines.delay
 
-enum class SetupStep { Welcome, Microphone, Overlay, AllFiles, Notifications, Accessibility, Model, Index, Done }
+enum class SetupStep { Welcome, Microphone, Overlay, AllFiles, Notifications, Accessibility, Model, Summaries, Index, Done }
 
 private fun isSatisfied(step: SetupStep, s: SetupStatus): Boolean = when (step) {
     SetupStep.Welcome, SetupStep.Done -> false
@@ -63,6 +64,7 @@ private fun isSatisfied(step: SetupStep, s: SetupStatus): Boolean = when (step) 
     SetupStep.Notifications -> s.notifications
     SetupStep.Accessibility -> s.accessibility
     SetupStep.Model -> s.modelReady
+    SetupStep.Summaries -> s.llmReady
     // An index can exist but be EMPTY (warmed before file access was granted) — that
     // doesn't count as done here, or the step would silently skip on fresh installs.
     SetupStep.Index -> s.indexReady && s.indexCount > 0
@@ -99,7 +101,7 @@ fun OnboardingScreen(
         }
     }
 
-    Scaffold(containerColor = MaterialTheme.colorScheme.background) { pad ->
+    Scaffold(containerColor = Color.Transparent) { pad ->
         Column(
             Modifier
                 .padding(pad)
@@ -291,6 +293,13 @@ private fun stepCopy(step: SetupStep): StepCopy = when (step) {
         "TACIT transcribes with Whisper, running entirely on this phone. " +
             "It's a one-time download of about 360 MB — Wi-Fi recommended."
     )
+    SetupStep.Summaries -> StepCopy(
+        "ON-DEVICE AI · OPTIONAL",
+        "Turn notes into orders.",
+        "TACIT can distill every note into a short summary with action items — " +
+            "quantities, names, dates, promises. It's a one-time 1.6 GB download; " +
+            "you can skip this and add it later from Settings."
+    )
     SetupStep.Index -> StepCopy(
         "YOUR LIBRARY",
         "Learn your notes.",
@@ -354,6 +363,23 @@ private fun StepAction(
                             Spacer(Modifier.height(10.dp))
                         }
                         TacitButton("Download model  ·  360 MB", actions.downloadModel, Modifier.fillMaxWidth())
+                    }
+                }
+                SetupStep.Summaries -> {
+                    if (setup.llmDownloading) {
+                        ProgressCapsule(setup.llmProgress, setup.llmStatus)
+                    } else {
+                        if (setup.llmStatus.startsWith("download failed") || setup.llmStatus == "incomplete") {
+                            Text(
+                                "Something interrupted the download — it resumes where it left off.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            Spacer(Modifier.height(10.dp))
+                        }
+                        TacitButton("Download model  ·  1.6 GB", actions.downloadLlm, Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(6.dp))
+                        GhostButton("Skip for now", onSkip, Modifier.align(Alignment.CenterHorizontally))
                     }
                 }
                 SetupStep.Index -> {

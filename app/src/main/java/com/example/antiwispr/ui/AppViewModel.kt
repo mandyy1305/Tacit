@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat
 import com.example.antiwispr.AppLog
 import com.example.antiwispr.DetectionHealth
 import com.example.antiwispr.IndexHolder
+import com.example.antiwispr.LlmModel
 import com.example.antiwispr.ProjectionService
 import com.example.antiwispr.StoredTranscript
 import com.example.antiwispr.Toggles
@@ -49,6 +50,10 @@ data class SetupStatus(
     val indexStatus: String = "",
     val indexCount: Int = 0,
     val indexProgress: Float? = null,
+    val llmReady: Boolean = false,
+    val llmDownloading: Boolean = false,
+    val llmStatus: String = "",
+    val llmProgress: Float? = null,
     val sessionActive: Boolean = false,
     val transcriptCount: Int = 0,
     val detection: String = "",
@@ -58,7 +63,7 @@ data class SetupStatus(
         get() = mic && overlay && files && accessibility && modelReady && indexReady
 }
 
-enum class ToggleKey { ForceHindi, DiagnosticMode, PauseOnPlay, Orchestration, MicFallback, PauseOnMatch }
+enum class ToggleKey { DiagnosticMode, PauseOnPlay, Orchestration, MicFallback, PauseOnMatch }
 
 /**
  * Single state holder for the Compose UI. The pipeline singletons expose @Volatile fields,
@@ -92,7 +97,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             while (isActive) {
                 refresh()
-                val busy = _setup.value.modelDownloading || _setup.value.indexBuilding
+                val busy = _setup.value.modelDownloading || _setup.value.indexBuilding ||
+                    _setup.value.llmDownloading
                 delay(if (busy) 400L else 2500L)
             }
         }
@@ -119,6 +125,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             indexCount = snap?.fileCount ?: 0,
             indexProgress = if (idx.building && idx.progressTotal > 0)
                 idx.progressDone.toFloat() / idx.progressTotal else null,
+            llmReady = LlmModel.isReady(ctx),
+            llmDownloading = LlmModel.downloading,
+            llmStatus = LlmModel.status,
+            llmProgress = if (LlmModel.downloading && LlmModel.totalBytes > 0)
+                LlmModel.downloadedBytes.toFloat() / LlmModel.totalBytes else null,
             sessionActive = ProjectionService.sessionActive,
             transcriptCount = Transcripts.get(ctx).count(),
             detection = DetectionHealth.summary(),
@@ -149,6 +160,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         WhisperModel.delete(ctx)
         refresh()
         downloadModel()
+    }
+
+    fun downloadLlm() {
+        val ctx = getApplication<Application>().applicationContext
+        if (LlmModel.isReady(ctx)) { AppLog.i("summary model already present (ready)."); refresh(); return }
+        AppLog.i("downloading summary model (~1.6 GB, one-time, Wi-Fi strongly recommended)…")
+        LlmModel.download(ctx) { AppLog.i(it); refresh() }
+        refresh()
+    }
+
+    fun redownloadLlm() {
+        val ctx = getApplication<Application>().applicationContext
+        if (LlmModel.downloading) return
+        LlmModel.delete(ctx)
+        refresh()
+        downloadLlm()
     }
 
     fun buildIndex() {
@@ -189,13 +216,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setToggle(key: ToggleKey, value: Boolean) {
         when (key) {
-            ToggleKey.ForceHindi -> { Toggles.forceHindi = value; AppLog.i("forceHindi = $value (recognizer rebuilds on next transcribe)") }
             ToggleKey.DiagnosticMode -> { Toggles.diagnosticMode = value; AppLog.i("diagnosticMode = $value") }
             ToggleKey.PauseOnPlay -> { Toggles.pauseOnPlay = value; AppLog.i("pauseOnPlay = $value") }
             ToggleKey.Orchestration -> { Toggles.orchestrationEnabled = value; AppLog.i("orchestrationEnabled = $value") }
             ToggleKey.MicFallback -> { Toggles.micFallbackEnabled = value; AppLog.i("micFallbackEnabled = $value") }
             ToggleKey.PauseOnMatch -> { Toggles.pauseOnMatch = value; AppLog.i("pauseOnMatch = $value") }
         }
+        refresh()
+    }
+
+    /** Deletes a cached transcript; the note is re-transcribed on-demand next time it plays. */
+    fun deleteTranscript(t: StoredTranscript) {
+        val ctx = getApplication<Application>().applicationContext
+        Transcripts.get(ctx).remove(t.key)
+        if (selectedTranscript?.key == t.key) selectedTranscript = null
         refresh()
     }
 

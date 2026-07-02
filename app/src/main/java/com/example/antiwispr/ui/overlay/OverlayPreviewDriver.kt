@@ -50,6 +50,18 @@ object OverlayPreviewDriver {
                 "your calendar. Baaki sab theek hai, mummy ko bola maine ki hum Sunday ko " +
                 "aayenge lunch pe. Chalo, see you tomorrow!"
         )
+        Thread.sleep(700)
+        o.setSummaryGenerating()
+        Thread.sleep(2000)
+        o.setSummaryReady(
+            "SUMMARY: Kal office ke baad milna tay hua hai; documents ready hain aur " +
+                "23rd ka venue confirm ho gaya hai.\n" +
+                "ACTIONS:\n" +
+                "- Lease agreement aur dono ID proofs kal le jana\n" +
+                "- Banker ko 5 baje se pehle call karna\n" +
+                "- 23rd ke liye calendar block karna\n" +
+                "- Sunday lunch pe mummy ke ghar jana"
+        )
     }
 
     private fun degraded(o: OverlayController) {
