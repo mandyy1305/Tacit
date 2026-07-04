@@ -39,6 +39,8 @@ class OverlayController(private val ctx: Context) {
     @Volatile private var onShareAction: (() -> Unit)? = null
     /** Invoked when the user dismisses the card (tap-away / ✕). Orchestrator uses it to cancel a listen. */
     @Volatile var onDismiss: (() -> Unit)? = null
+    /** Invoked by the card's "Summarize all N" button (chain summaries). */
+    @Volatile var onSummarizeChain: (() -> Unit)? = null
     /** True once the user dismissed the card; blocks a still-running listen from re-creating it. */
     @Volatile private var dismissed = false
     /** When a result is showing, ignore outside-touch dismissal (incl. our own pause-on-match click). */
@@ -168,6 +170,27 @@ class OverlayController(private val ctx: Context) {
         state.value = state.value.copy(summaryState = SummaryState.UNAVAILABLE)
     }
 
+    /** The matched note belongs to a burst: "Part [part] of [count]". */
+    fun setChainInfo(part: Int, count: Int) = onMain {
+        if (dropUpdate("chain info")) return@onMain
+        state.value = state.value.copy(chainPart = part, chainCount = count)
+    }
+
+    /** Chain gist is being generated (transcribe members + summarize). */
+    fun setChainSummaryGenerating() = onMain {
+        if (dropUpdate("chain summary(generating)")) return@onMain
+        state.value = state.value.copy(summaryState = SummaryState.GENERATING, chainSummary = true)
+    }
+
+    /** Chain gist ready — replaces the single-note summary in the Summary tab. */
+    fun setChainSummaryReady(raw: String) = onMain {
+        if (dropUpdate("chain summary")) return@onMain
+        ensureWindow()
+        state.value = state.value.copy(
+            summaryState = SummaryState.READY, summaryRaw = raw, chainSummary = true,
+        )
+    }
+
     fun dismiss() {
         val issuedFor = session // capture on the CALLING thread, before marshalling
         onMain {
@@ -198,6 +221,7 @@ class OverlayController(private val ctx: Context) {
                         onClose = { dismiss() },
                         onShare = { onShareAction?.invoke() },
                         onCopy = { text -> copyText(text) },
+                        onSummarizeChain = { onSummarizeChain?.invoke() },
                         onExitFinished = { removeWindow() },
                     )
                 }

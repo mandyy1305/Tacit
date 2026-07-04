@@ -40,7 +40,7 @@ class Indexer(private val appContext: Context) {
 
     private val indexFile = File(appContext.filesDir, "fpindex.bin")
     private val exec = Executors.newSingleThreadExecutor { r -> Thread(r, "indexer").apply { isDaemon = true } }
-    private val transcriber by lazy { WhisperTranscriber(appContext) } // only used for new-note auto-transcribe
+    private val transcriber by lazy { TranscriberHolder.get(appContext) } // shared instance (one model in RAM)
 
     private fun key(path: String, mtime: Long, size: Long) = "$path|$mtime|$size"
 

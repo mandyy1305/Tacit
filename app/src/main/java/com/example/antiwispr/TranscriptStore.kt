@@ -21,7 +21,8 @@ data class StoredTranscript(
     val durationSec: Double,
     val text: String,
     val updatedAt: Long,
-    val summary: String = ""  // raw LLM "SUMMARY:/ACTIONS:" text; "" = not generated (v2)
+    val summary: String = "",  // raw LLM "SUMMARY:/ACTIONS:" text; "" = not generated (v2)
+    val chatName: String = ""  // WhatsApp chat title captured at play-tap; "" = unknown (v3)
 )
 
 /**
@@ -32,7 +33,7 @@ data class StoredTranscript(
  */
 object Transcripts {
     private const val MAGIC = 0x41575458 // "AWTX"
-    private const val VERSION = 2 // v2 adds the summary field; v1 stores load with summary=""
+    private const val VERSION = 3 // v2 added summary; v3 adds chatName; older stores migrate with ""
 
     @Volatile private var loaded = false
     private lateinit var file: File
@@ -58,6 +59,31 @@ object Transcripts {
     @Synchronized fun all(limit: Int = Int.MAX_VALUE): List<StoredTranscript> =
         map.values.sortedByDescending { it.updatedAt }.take(limit)
 
+    /** Records updated after [sinceMs], oldest first (cloud-sync push cursor). */
+    @Synchronized fun changedSince(sinceMs: Long): List<StoredTranscript> =
+        map.values.filter { it.updatedAt > sinceMs }.sortedBy { it.updatedAt }
+
+    /**
+     * Merge remote state (cloud-sync pull): last-write-wins upserts + tombstone deletes.
+     * One save() for the whole batch. Returns how many records changed.
+     */
+    @Synchronized fun applyRemote(upserts: List<StoredTranscript>, deletedKeys: List<String>): Int {
+        var changed = 0
+        for (t in upserts) {
+            val cur = map[t.key]
+            if (cur == null || cur.updatedAt < t.updatedAt) {
+                map[t.key] = t
+                changed++
+            }
+        }
+        for (k in deletedKeys) if (map.remove(k) != null) changed++
+        if (changed > 0) {
+            save()
+            AppLog.i("[transcripts] merged $changed change(s) from cloud.")
+        }
+        return changed
+    }
+
     /** Cached transcript text for this file, or null. */
     @Synchronized fun find(f: File): String? = map[keyFor(f)]?.text
 
@@ -71,12 +97,15 @@ object Transcripts {
         save()
     }
 
-    @Synchronized fun put(f: File, text: String) {
+    @Synchronized fun put(f: File, text: String, chatName: String = "") {
         val p = VoiceNotes.parseWhatsAppName(f.name)
+        val existing = map[keyFor(f)]
         map[keyFor(f)] = StoredTranscript(
             key = keyFor(f), path = f.absolutePath, name = f.name,
             waDate = p?.dateYmd ?: -1, seq = p?.seq ?: -1,
-            durationSec = -1.0, text = text, updatedAt = System.currentTimeMillis()
+            durationSec = -1.0, text = text, updatedAt = System.currentTimeMillis(),
+            summary = existing?.summary ?: "",
+            chatName = chatName.ifEmpty { existing?.chatName ?: "" }, // never downgrade a known chat
         )
         save()
     }
@@ -119,7 +148,8 @@ object Transcripts {
                 val waDate = din.readInt(); val seq = din.readInt(); val dur = din.readDouble()
                 val text = din.readUTF(); val updated = din.readLong()
                 val summary = if (version >= 2) din.readUTF() else "" // v1 → migrate with no summary
-                map[key] = StoredTranscript(key, path, name, waDate, seq, dur, text, updated, summary)
+                val chatName = if (version >= 3) din.readUTF() else "" // v1/v2 → unknown chat
+                map[key] = StoredTranscript(key, path, name, waDate, seq, dur, text, updated, summary, chatName)
             }
             if (version < VERSION) AppLog.i("[transcripts] migrated store v$version → v$VERSION (${map.size} records).")
         } catch (e: Exception) {
@@ -139,6 +169,7 @@ object Transcripts {
                 dos.writeInt(t.waDate); dos.writeInt(t.seq); dos.writeDouble(t.durationSec)
                 dos.writeUTF(t.text); dos.writeLong(t.updatedAt)
                 dos.writeUTF(t.summary)
+                dos.writeUTF(t.chatName)
             }
             dos.flush()
             DataOutputStream(fos).writeLong(crc.value)

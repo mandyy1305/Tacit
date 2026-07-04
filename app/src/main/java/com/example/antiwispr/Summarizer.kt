@@ -110,17 +110,34 @@ object Summarizer {
     private val engineLock = Any()
     private val inFlight = ConcurrentHashMap.newKeySet<String>()
 
+    /** Some path can produce a summary: local model present, or cloud reachable-in-principle. */
+    fun canSummarize(context: Context): Boolean =
+        LlmModel.isReady(context) ||
+            (com.example.antiwispr.cloud.CloudClient.ready(context) &&
+                com.example.antiwispr.cloud.CloudPrefs.cloudSummaries(context))
+
     /**
      * Queue a summary for [transcript]; [onDone] receives the RAW result text (bracket-prefixed
      * "[…]" = error, same convention as transcription) on the summarizer thread. Duplicate
-     * requests for a key already in flight are dropped.
+     * requests for a key already in flight are dropped. Cloud (gpt-4o-mini via tacit-cloud)
+     * is preferred when signed in + enabled; the on-device engine is the fallback.
      */
     fun request(context: Context, key: String, transcript: String, onDone: (String) -> Unit) {
         if (!inFlight.add(key)) { AppLog.i("[summarizer] already summarizing this note — skipping."); return }
         val appContext = context.applicationContext
         exec.execute {
             val result = try {
-                generate(appContext, transcript)
+                val cloud = if (com.example.antiwispr.cloud.CloudClient.ready(appContext) &&
+                    com.example.antiwispr.cloud.CloudPrefs.cloudSummaries(appContext)
+                ) {
+                    com.example.antiwispr.cloud.CloudClient.summarize(appContext, transcript.take(MAX_INPUT_CHARS))
+                } else null
+                if (cloud != null) {
+                    AppLog.i("[summarizer] cloud summary (gpt-4o-mini).")
+                    cloud
+                } else {
+                    generate(appContext, transcript)
+                }
             } catch (t: Throwable) {
                 // Contain Throwable: a native OOM in the LLM must not kill the shared process.
                 AppLog.e("[summarizer] failed: ${t.javaClass.simpleName}: ${t.message}", t)
@@ -132,6 +149,63 @@ object Summarizer {
         }
     }
 
+    /**
+     * Chain variant, BLOCKING (runs on ChainSummarizer's thread): cloud first, local
+     * fallback, chain-specific prompt, same SUMMARY:/ACTIONS: contract.
+     */
+    fun summarizeChainBlocking(context: Context, combined: String, count: Int, sender: String?): String {
+        val ctx = context.applicationContext
+        val text = combined.take(MAX_INPUT_CHARS)
+        val cloud = if (com.example.antiwispr.cloud.CloudClient.ready(ctx) &&
+            com.example.antiwispr.cloud.CloudPrefs.cloudSummaries(ctx)
+        ) {
+            com.example.antiwispr.cloud.CloudClient.summarizeChain(ctx, text, count, sender)
+        } else null
+        if (cloud != null) {
+            AppLog.i("[summarizer] cloud chain summary (gpt-4o-mini).")
+            return cloud
+        }
+        if (!LlmModel.isReady(ctx)) return "[summary unavailable — no model and no cloud connection]"
+        val eng = ensureEngine(ctx) ?: return "[summarizer init failed]"
+        val t0 = System.currentTimeMillis()
+        val session = LlmInferenceSession.createFromOptions(
+            eng,
+            LlmInferenceSession.LlmInferenceSessionOptions.builder()
+                .setTopK(40)
+                .setTemperature(0.3f)
+                .build()
+        )
+        return try {
+            session.addQueryChunk(buildChainPrompt(text, count, sender))
+            val out = session.generateResponse().trim()
+            AppLog.i("[summarizer] chain generated ${out.length} chars in ${System.currentTimeMillis() - t0} ms.")
+            out.ifEmpty { "[summary empty — try regenerating]" }
+        } finally {
+            try { session.close() } catch (_: Exception) {}
+        }
+    }
+
+    private fun buildChainPrompt(combined: String, count: Int, sender: String?): String {
+        val who = if (sender.isNullOrBlank()) "" else " by $sender"
+        return """
+            These are $count WhatsApp voice notes sent IN A ROW$who — treat them as ONE message.
+            Reply in the SAME language and style as the notes (if they mix Hindi and English, do
+            the same). Be brief and factual — never invent details. Put the single most important
+            ask or point FIRST. Use EXACTLY this format:
+            SUMMARY: <2-4 short sentences covering the whole chain>
+            ACTIONS:
+            - <one action item per line, keeping quantities, names, amounts and dates as spoken>
+            If there is nothing to act on, write exactly:
+            ACTIONS:
+            - none
+
+            Voice notes:
+            ${'"'}${'"'}${'"'}
+            $combined
+            ${'"'}${'"'}${'"'}
+        """.trimIndent()
+    }
+
     /** Free the engine (model deleted / re-downloaded). Safe to call anytime. */
     fun releaseEngine() {
         synchronized(engineLock) {
@@ -141,7 +215,7 @@ object Summarizer {
     }
 
     private fun generate(context: Context, transcript: String): String {
-        if (!LlmModel.isReady(context)) return "[summary model not downloaded]"
+        if (!LlmModel.isReady(context)) return "[summary unavailable — no model and no cloud connection]"
         val eng = ensureEngine(context) ?: return "[summarizer init failed]"
         val text = transcript.take(MAX_INPUT_CHARS)
         val t0 = System.currentTimeMillis()

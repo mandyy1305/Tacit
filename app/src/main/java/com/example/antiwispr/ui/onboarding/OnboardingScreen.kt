@@ -63,8 +63,9 @@ private fun isSatisfied(step: SetupStep, s: SetupStatus): Boolean = when (step) 
     SetupStep.AllFiles -> s.files
     SetupStep.Notifications -> s.notifications
     SetupStep.Accessibility -> s.accessibility
-    SetupStep.Model -> s.modelReady
-    SetupStep.Summaries -> s.llmReady
+    // Signed-in users can run cloud-only — the local models become optional.
+    SetupStep.Model -> s.modelReady || s.signedIn
+    SetupStep.Summaries -> s.llmReady || s.signedIn
     // An index can exist but be EMPTY (warmed before file access was granted) — that
     // doesn't count as done here, or the step would silently skip on fresh installs.
     SetupStep.Index -> s.indexReady && s.indexCount > 0

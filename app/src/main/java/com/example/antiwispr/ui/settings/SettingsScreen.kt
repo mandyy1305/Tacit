@@ -27,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -36,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +47,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.antiwispr.Toggles
+import com.example.antiwispr.cloud.CloudAuth
 import com.example.antiwispr.ui.AppViewModel
 import com.example.antiwispr.ui.SetupStatus
 import com.example.antiwispr.ui.ToggleKey
@@ -52,9 +55,12 @@ import com.example.antiwispr.ui.components.GhostButton
 import com.example.antiwispr.ui.components.InkDivider
 import com.example.antiwispr.ui.components.ProgressCapsule
 import com.example.antiwispr.ui.components.SectionHeader
+import com.example.antiwispr.ui.components.TacitButton
+import com.example.antiwispr.ui.components.relativeTime
 import com.example.antiwispr.ui.overlay.OverlayPreviewDriver
 import com.example.antiwispr.ui.theme.Dimens
 import com.example.antiwispr.ui.theme.MonoStyle
+import kotlinx.coroutines.launch
 
 /** Human-readable controls over the runtime Toggles + model management + Developer tools. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -66,10 +72,14 @@ fun SettingsScreen(
     onOpenLog: () -> Unit,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var confirmRedownload by remember { mutableStateOf(false) }
     var confirmRedownloadLlm by remember { mutableStateOf(false) }
+    var confirmDeleteWhisper by remember { mutableStateOf(false) }
+    var confirmDeleteLlm by remember { mutableStateOf(false) }
     var showFolderReport by remember { mutableStateOf(false) }
     var devOpen by remember { mutableStateOf(false) }
+    var signInError by remember { mutableStateOf<String?>(null) }
 
     Scaffold(containerColor = Color.Transparent) { pad ->
         Column(
@@ -97,6 +107,77 @@ fun SettingsScreen(
 
             Column(Modifier.padding(horizontal = Dimens.screenPad)) {
                 Spacer(Modifier.height(16.dp))
+                SectionHeader("Account")
+                Spacer(Modifier.height(4.dp))
+                when {
+                    !setup.cloudConfigured -> Text(
+                        "Cloud isn't configured — add google-services.json from the Firebase " +
+                            "console to app/src/main/assets and rebuild.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    !setup.signedIn -> Column {
+                        Text(
+                            "Sign in to back up your transcripts and unlock cloud transcription " +
+                                "and sharper summaries.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        TacitButton("Sign in with Google", onClick = {
+                            signInError = null
+                            scope.launch {
+                                CloudAuth.signIn(context)
+                                    .onSuccess { vm.onSignedIn() }
+                                    .onFailure { signInError = it.message }
+                            }
+                        }, modifier = Modifier.fillMaxWidth())
+                        signInError?.let {
+                            Spacer(Modifier.height(8.dp))
+                            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        CloudUrlField(setup.cloudBaseUrl) { vm.setCloudBaseUrl(it) }
+                    }
+                    else -> Column {
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    setup.accountEmail ?: "Signed in",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    when {
+                                        setup.syncing -> "Syncing…"
+                                        setup.lastSyncMs > 0 -> "Synced ${relativeTime(setup.lastSyncMs).lowercase()}"
+                                        else -> "Not synced yet"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            GhostButton("Sync now", onClick = { vm.syncNow() }, enabled = !setup.syncing)
+                            GhostButton("Sign out", onClick = { vm.signOut() })
+                        }
+                        ToggleRow(
+                            "Cloud transcription",
+                            "Sarvam AI via your server — sharper Hinglish than on-device Whisper.",
+                            initial = setup.cloudTranscription,
+                        ) { vm.setCloudTranscription(it) }
+                        ToggleRow(
+                            "Cloud summaries",
+                            "gpt-4o-mini via your server — better summaries and action items.",
+                            initial = setup.cloudSummaries,
+                        ) { vm.setCloudSummaries(it) }
+                        CloudUrlField(setup.cloudBaseUrl) { vm.setCloudBaseUrl(it) }
+                    }
+                }
+
+                Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
                 SectionHeader("Transcription")
                 Spacer(Modifier.height(4.dp))
                 Row(
@@ -118,11 +199,20 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    GhostButton(
-                        "Re-download",
-                        onClick = { confirmRedownload = true },
-                        enabled = !setup.modelDownloading,
-                    )
+                    if (setup.modelReady) {
+                        GhostButton("Delete", onClick = { confirmDeleteWhisper = true })
+                        GhostButton(
+                            "Re-download",
+                            onClick = { confirmRedownload = true },
+                            enabled = !setup.modelDownloading,
+                        )
+                    } else {
+                        GhostButton(
+                            "Download",
+                            onClick = { vm.downloadModel() },
+                            enabled = !setup.modelDownloading,
+                        )
+                    }
                 }
                 if (setup.modelDownloading) {
                     ProgressCapsule(setup.modelProgress, setup.modelStatus)
@@ -152,6 +242,7 @@ fun SettingsScreen(
                         )
                     }
                     if (setup.llmReady) {
+                        GhostButton("Delete", onClick = { confirmDeleteLlm = true })
                         GhostButton(
                             "Re-download",
                             onClick = { confirmRedownloadLlm = true },
@@ -284,6 +375,56 @@ fun SettingsScreen(
         )
     }
 
+    if (confirmDeleteWhisper) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteWhisper = false },
+            title = { Text("Delete Whisper model?", style = MaterialTheme.typography.headlineSmall) },
+            text = {
+                Text(
+                    "Frees ~360 MB. Transcription will use the cloud when you're signed in — " +
+                        "or you can re-download the model anytime.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmDeleteWhisper = false; vm.deleteWhisperModel() }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteWhisper = false }) {
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        )
+    }
+
+    if (confirmDeleteLlm) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteLlm = false },
+            title = { Text("Delete summary model?", style = MaterialTheme.typography.headlineSmall) },
+            text = {
+                Text(
+                    "Frees ~1.6 GB. Summaries will use the cloud when you're signed in — " +
+                        "or you can re-download the model anytime.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmDeleteLlm = false; vm.deleteLlmModel() }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteLlm = false }) {
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        )
+    }
+
     if (confirmRedownloadLlm) {
         AlertDialog(
             onDismissRequest = { confirmRedownloadLlm = false },
@@ -333,6 +474,21 @@ fun SettingsScreen(
             }
         }
     }
+}
+
+/** Dev-facing server URL (e.g. http://192.168.1.5:8080 while the Go server runs locally). */
+@Composable
+private fun CloudUrlField(current: String, onChange: (String) -> Unit) {
+    var value by remember { mutableStateOf(current) }
+    OutlinedTextField(
+        value = value,
+        onValueChange = { value = it; onChange(it) },
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        label = { Text("Server URL", style = MaterialTheme.typography.labelMedium) },
+        placeholder = { Text("http://192.168.1.5:8080", style = MaterialTheme.typography.bodySmall) },
+        textStyle = MaterialTheme.typography.bodyMedium,
+        singleLine = true,
+    )
 }
 
 @Composable

@@ -17,6 +17,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.core.content.ContextCompat
 import com.example.antiwispr.AppLog
+import com.example.antiwispr.Chains
 import com.example.antiwispr.DetectionHealth
 import com.example.antiwispr.IndexHolder
 import com.example.antiwispr.LlmModel
@@ -28,6 +29,10 @@ import com.example.antiwispr.VoiceNoteWatcher
 import com.example.antiwispr.VoiceNotes
 import com.example.antiwispr.WhatsAppAccessibilityService
 import com.example.antiwispr.WhisperModel
+import com.example.antiwispr.cloud.CloudClient
+import com.example.antiwispr.cloud.CloudPrefs
+import com.example.antiwispr.cloud.FirebaseBootstrap
+import com.example.antiwispr.cloud.SyncEngine
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -54,13 +59,22 @@ data class SetupStatus(
     val llmDownloading: Boolean = false,
     val llmStatus: String = "",
     val llmProgress: Float? = null,
+    val cloudConfigured: Boolean = false,
+    val signedIn: Boolean = false,
+    val accountEmail: String? = null,
+    val syncing: Boolean = false,
+    val lastSyncMs: Long = 0L,
+    val cloudBaseUrl: String = "",
+    val cloudTranscription: Boolean = true,
+    val cloudSummaries: Boolean = true,
     val sessionActive: Boolean = false,
     val transcriptCount: Int = 0,
     val detection: String = "",
 ) {
-    /** Notifications are deliberately optional (capture works without the FGS notice). */
+    /** Notifications are deliberately optional (capture works without the FGS notice).
+     *  A signed-in user can run cloud-only — local Whisper is then optional too. */
     val setupComplete: Boolean
-        get() = mic && overlay && files && accessibility && modelReady && indexReady
+        get() = mic && overlay && files && accessibility && (modelReady || signedIn) && indexReady
 }
 
 enum class ToggleKey { DiagnosticMode, PauseOnPlay, Orchestration, MicFallback, PauseOnMatch }
@@ -83,6 +97,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _recents = MutableStateFlow<List<StoredTranscript>>(emptyList())
     val recents = _recents.asStateFlow()
 
+    /** Keys of transcripts that belong to a chain (for list badges). */
+    private val _chainKeys = MutableStateFlow<Set<String>>(emptySet())
+    val chainKeys = _chainKeys.asStateFlow()
+
     var searchQuery by mutableStateOf("")
 
     /** Detail-screen selection. Store keys contain '/' and '|' — never a nav argument. */
@@ -91,9 +109,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     init {
         AppLog.i("=== TACIT — every voice note, read ===")
         val ctx = app.applicationContext
+        FirebaseBootstrap.ensureInitialized(ctx)
         // Parity with the old MainActivity.onCreate: warm the index, start the folder watcher.
         IndexHolder.get(ctx).loadOrBuild { AppLog.i(it); refresh() }
         VoiceNoteWatcher.ensureStarted { IndexHolder.get(ctx).loadOrBuild { AppLog.i(it); refresh() } }
+        SyncEngine.requestSync(ctx) // no-op unless configured + signed in
         viewModelScope.launch {
             while (isActive) {
                 refresh()
@@ -130,17 +150,75 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             llmStatus = LlmModel.status,
             llmProgress = if (LlmModel.downloading && LlmModel.totalBytes > 0)
                 LlmModel.downloadedBytes.toFloat() / LlmModel.totalBytes else null,
+            cloudConfigured = FirebaseBootstrap.available,
+            signedIn = CloudClient.isSignedIn(),
+            accountEmail = CloudClient.accountEmail(),
+            syncing = SyncEngine.syncing,
+            lastSyncMs = CloudPrefs.lastSyncMs(ctx),
+            cloudBaseUrl = CloudPrefs.baseUrl(ctx),
+            cloudTranscription = CloudPrefs.cloudTranscription(ctx),
+            cloudSummaries = CloudPrefs.cloudSummaries(ctx),
             sessionActive = ProjectionService.sessionActive,
             transcriptCount = Transcripts.get(ctx).count(),
             detection = DetectionHealth.summary(),
         )
         _recents.value = Transcripts.get(ctx).all(20)
+        _chainKeys.value = try { Chains.memberKeys(Transcripts.get(ctx)) } catch (_: Exception) { emptySet() }
     }
 
     /** Called from AppRoot's resume hook — retries the watcher after all-files was granted. */
     fun onResumed() {
         val ctx = getApplication<Application>().applicationContext
         VoiceNoteWatcher.ensureStarted { IndexHolder.get(ctx).loadOrBuild { AppLog.i(it); refresh() } }
+        SyncEngine.requestSync(ctx)
+        refresh()
+    }
+
+    // ---- cloud account -------------------------------------------------------------
+
+    fun onSignedIn() {
+        val ctx = getApplication<Application>().applicationContext
+        SyncEngine.requestSync(ctx)
+        refresh()
+    }
+
+    fun signOut() {
+        val ctx = getApplication<Application>().applicationContext
+        CloudClient.signOut()
+        CloudPrefs.resetSyncState(ctx)
+        AppLog.i("[cloud] signed out.")
+        refresh()
+    }
+
+    fun syncNow() {
+        SyncEngine.requestSync(getApplication<Application>().applicationContext)
+        refresh()
+    }
+
+    fun setCloudBaseUrl(url: String) {
+        CloudPrefs.setBaseUrl(getApplication<Application>().applicationContext, url)
+        refresh()
+    }
+
+    fun setCloudTranscription(v: Boolean) {
+        CloudPrefs.setCloudTranscription(getApplication<Application>().applicationContext, v)
+        AppLog.i("cloudTranscription = $v"); refresh()
+    }
+
+    fun setCloudSummaries(v: Boolean) {
+        CloudPrefs.setCloudSummaries(getApplication<Application>().applicationContext, v)
+        AppLog.i("cloudSummaries = $v"); refresh()
+    }
+
+    fun deleteWhisperModel() {
+        val ctx = getApplication<Application>().applicationContext
+        WhisperModel.delete(ctx)
+        refresh()
+    }
+
+    fun deleteLlmModel() {
+        val ctx = getApplication<Application>().applicationContext
+        LlmModel.delete(ctx)
         refresh()
     }
 
@@ -229,6 +307,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteTranscript(t: StoredTranscript) {
         val ctx = getApplication<Application>().applicationContext
         Transcripts.get(ctx).remove(t.key)
+        SyncEngine.queueDeletion(ctx, t.key) // tombstone so the cloud copy dies too
         if (selectedTranscript?.key == t.key) selectedTranscript = null
         refresh()
     }

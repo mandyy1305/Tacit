@@ -17,6 +17,12 @@ one-time ~1.6 GB download from `litert-community`) turns each transcript into a 
 plus action items, in the note's own language. Both the overlay card and the in-app reader have
 Summary | Transcript tabs; play-tap transcripts summarize automatically, older notes on first open.
 
+**Cloud (optional):** sign in with Google (Firebase Auth, config via `app/src/main/assets/google-services.json`
+— git-ignored) against the companion [tacit-cloud](../tacit-cloud) Go server for transcript
+backup/sync across installs, cloud transcription (Sarvam AI — sharper Hinglish), and cloud
+summaries (gpt-4o-mini). Everything falls back to the on-device path when signed out or offline,
+and the on-device models can be deleted from Settings to reclaim ~2 GB once cloud is set up.
+
 > Note: this reads WhatsApp's private data (accessibility + audio capture + file access). It's a
 > personal/sideload experiment, not a Play-Store-distributable app.
 

@@ -57,6 +57,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
     val context = LocalContext.current
     val setup by vm.setup.collectAsStateWithLifecycle()
     val recents by vm.recents.collectAsStateWithLifecycle()
+    val chainKeys by vm.chainKeys.collectAsStateWithLifecycle()
     val nav = rememberNavController()
 
     val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -169,6 +170,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
             HomeScreen(
                 setup = setup,
                 recents = recents,
+                chainKeys = chainKeys,
                 actions = actions,
                 onOpenSettings = { nav.navigate("settings") },
                 onOpenSearch = { nav.navigate("search") },
@@ -180,6 +182,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
             SearchScreen(
                 query = vm.searchQuery,
                 onQueryChange = { vm.searchQuery = it },
+                chainKeys = chainKeys,
                 onBack = { nav.popBackStack() },
                 onOpen = { vm.selectedTranscript = it; nav.navigate("transcript") },
             )

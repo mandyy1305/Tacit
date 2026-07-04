@@ -97,6 +97,7 @@ fun TacitOverlayCard(
     onClose: () -> Unit,
     onShare: () -> Unit,
     onCopy: (String) -> Unit,
+    onSummarizeChain: () -> Unit = {},
     onExitFinished: () -> Unit,
 ) {
     val enterState = remember { MutableTransitionState(false) }
@@ -174,7 +175,7 @@ fun TacitOverlayCard(
                     OverlayPhase.LISTENING -> ListeningBody(state)
                     OverlayPhase.MATCHED -> MatchedBody(state)
                     OverlayPhase.TRANSCRIBING -> TranscribingBody(state)
-                    OverlayPhase.TRANSCRIPT -> TranscriptBody(state, onCopy)
+                    OverlayPhase.TRANSCRIPT -> TranscriptBody(state, onCopy, onSummarizeChain)
                     OverlayPhase.NO_MATCH -> NoMatchBody()
                     OverlayPhase.NOTICE -> NoticeBody(state)
                 }
@@ -340,8 +341,9 @@ private fun MatchLine(state: OverlayUiState, animateBadge: Boolean) {
                 fontSize = 10.sp, letterSpacing = 1.5.sp,
                 color = OverlayPalette.mint,
             )
+            val meta = state.match?.meta ?: "Voice note"
             Text(
-                state.match?.meta ?: "Voice note",
+                if (state.chainCount > 1) "Part ${state.chainPart} of ${state.chainCount}  ·  $meta" else meta,
                 fontFamily = Inter, fontWeight = FontWeight.Medium,
                 fontSize = 14.sp, color = OverlayPalette.ink,
             )
@@ -400,7 +402,7 @@ private fun TranscribingShimmer() {
 }
 
 @Composable
-private fun TranscriptBody(state: OverlayUiState, onCopy: (String) -> Unit) {
+private fun TranscriptBody(state: OverlayUiState, onCopy: (String) -> Unit, onSummarizeChain: () -> Unit) {
     // 0 = Summary (the point of the product), 1 = Transcript.
     var tab by remember { mutableIntStateOf(0) }
     Column {
@@ -416,7 +418,7 @@ private fun TranscriptBody(state: OverlayUiState, onCopy: (String) -> Unit) {
             label = "tab",
         ) { t ->
             Box(Modifier.verticalScroll(rememberScrollState())) {
-                if (t == 0) SummaryPane(state) else TranscriptPane(state)
+                if (t == 0) SummaryPane(state, onSummarizeChain) else TranscriptPane(state)
             }
         }
         Spacer(Modifier.height(10.dp))
@@ -487,63 +489,93 @@ private fun TranscriptPane(state: OverlayUiState) {
 }
 
 @Composable
-private fun SummaryPane(state: OverlayUiState) {
-    when (state.summaryState) {
-        SummaryState.GENERATING, SummaryState.NONE -> Column {
+private fun SummaryPane(state: OverlayUiState, onSummarizeChain: () -> Unit) {
+    Column {
+        if (state.chainSummary && state.chainCount > 1) {
             Text(
-                "Summarizing on this phone…",
-                fontFamily = Inter, fontSize = 12.sp,
-                color = OverlayPalette.inkFaint,
+                "CHAIN · ${state.chainCount} NOTES",
+                fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+                fontSize = 10.sp, letterSpacing = 1.5.sp,
+                color = OverlayPalette.mint,
             )
-            Spacer(Modifier.height(8.dp))
-            TranscribingShimmer()
+            Spacer(Modifier.height(6.dp))
         }
-        SummaryState.UNAVAILABLE -> Text(
-            "Summaries need a one-time model download — open TACIT → Settings → Summaries.",
-            fontFamily = Inter, fontSize = 13.sp,
-            color = OverlayPalette.inkMuted,
-        )
-        SummaryState.READY -> {
-            val raw = state.summaryRaw.orEmpty()
-            if (raw.startsWith("[")) {
+        when (state.summaryState) {
+            SummaryState.GENERATING, SummaryState.NONE -> Column {
                 Text(
-                    humanizeNotice(raw),
-                    fontFamily = Inter, fontSize = 13.sp,
-                    color = OverlayPalette.inkMuted,
+                    if (state.chainSummary && state.chainCount > 1)
+                        "Summarizing ${state.chainCount} notes…"
+                    else "Summarizing on this phone…",
+                    fontFamily = Inter, fontSize = 12.sp,
+                    color = OverlayPalette.inkFaint,
                 )
-            } else {
-                val parts = remember(raw) { com.example.antiwispr.parseSummary(raw) }
-                Column {
+                Spacer(Modifier.height(8.dp))
+                TranscribingShimmer()
+            }
+            SummaryState.UNAVAILABLE -> Text(
+                "Summaries need a one-time model download — open TACIT → Settings → Summaries.",
+                fontFamily = Inter, fontSize = 13.sp,
+                color = OverlayPalette.inkMuted,
+            )
+            SummaryState.READY -> {
+                val raw = state.summaryRaw.orEmpty()
+                if (raw.startsWith("[")) {
                     Text(
-                        parts.summary,
-                        fontFamily = Inter, fontSize = 15.sp, lineHeight = 23.sp,
-                        color = OverlayPalette.ink,
+                        humanizeNotice(raw),
+                        fontFamily = Inter, fontSize = 13.sp,
+                        color = OverlayPalette.inkMuted,
                     )
-                    if (parts.actions.isNotEmpty()) {
-                        Spacer(Modifier.height(12.dp))
+                } else {
+                    val parts = remember(raw) { com.example.antiwispr.parseSummary(raw) }
+                    Column {
                         Text(
-                            "ACTIONS",
-                            fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-                            fontSize = 10.sp, letterSpacing = 1.5.sp,
-                            color = OverlayPalette.accent,
+                            parts.summary,
+                            fontFamily = Inter, fontSize = 15.sp, lineHeight = 23.sp,
+                            color = OverlayPalette.ink,
                         )
-                        Spacer(Modifier.height(4.dp))
-                        parts.actions.forEach { action ->
-                            Row(Modifier.padding(vertical = 2.dp)) {
-                                Text(
-                                    "–  ",
-                                    fontFamily = Inter, fontSize = 14.sp, lineHeight = 21.sp,
-                                    color = OverlayPalette.accent,
-                                )
-                                Text(
-                                    action,
-                                    fontFamily = Inter, fontSize = 14.sp, lineHeight = 21.sp,
-                                    color = OverlayPalette.ink,
-                                )
+                        if (parts.actions.isNotEmpty()) {
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                "ACTIONS",
+                                fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+                                fontSize = 10.sp, letterSpacing = 1.5.sp,
+                                color = OverlayPalette.accent,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            parts.actions.forEach { action ->
+                                Row(Modifier.padding(vertical = 2.dp)) {
+                                    Text(
+                                        "–  ",
+                                        fontFamily = Inter, fontSize = 14.sp, lineHeight = 21.sp,
+                                        color = OverlayPalette.accent,
+                                    )
+                                    Text(
+                                        action,
+                                        fontFamily = Inter, fontSize = 14.sp, lineHeight = 21.sp,
+                                        color = OverlayPalette.ink,
+                                    )
+                                }
                             }
                         }
                     }
                 }
+            }
+        }
+        // Button-first chain UX: offer the burst gist without surprising compute.
+        if (state.chainCount > 1 && !state.chainSummary) {
+            Spacer(Modifier.height(10.dp))
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, OverlayPalette.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                    .clickable(onClick = onSummarizeChain)
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+            ) {
+                Text(
+                    "Summarize all ${state.chainCount} →",
+                    fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp, color = OverlayPalette.accent,
+                )
             }
         }
     }

@@ -30,6 +30,7 @@ import com.example.antiwispr.ui.theme.Dimens
 fun TranscriptCard(
     transcript: StoredTranscript,
     query: String? = null,
+    chained: Boolean = false,
     onClick: () -> Unit = {},
     onLongPress: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
@@ -48,11 +49,22 @@ fun TranscriptCard(
         Column(Modifier.padding(Dimens.cardPad)) {
             Row {
                 Text(
-                    waDateLabel(transcript.waDate) ?: "Voice note",
+                    buildString {
+                        append(waDateLabel(transcript.waDate) ?: "Voice note")
+                        if (transcript.chatName.isNotEmpty()) append("  ·  ${transcript.chatName}")
+                    },
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary,
                 )
+                if (chained) {
+                    Text(
+                        "CHAIN",
+                        modifier = Modifier.padding(end = 8.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
                 Text(
                     relativeTime(transcript.updatedAt),
                     style = MaterialTheme.typography.bodySmall,

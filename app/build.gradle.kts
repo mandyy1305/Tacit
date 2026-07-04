@@ -52,6 +52,16 @@ dependencies {
     // On-device LLM for transcript summaries (MediaPipe LLM Inference; Qwen2.5-1.5B .task
     // downloaded at runtime like the Whisper model).
     implementation(libs.mediapipe.tasks.genai)
+
+    // TACIT Cloud: Firebase Auth is the identity layer only (initialized manually from
+    // assets/google-services.json — no google-services Gradle plugin, which fights AGP 9);
+    // Credential Manager drives Google sign-in; OkHttp talks to the tacit-cloud Go server.
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.auth)
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services)
+    implementation(libs.googleid)
+    implementation(libs.okhttp)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)
 

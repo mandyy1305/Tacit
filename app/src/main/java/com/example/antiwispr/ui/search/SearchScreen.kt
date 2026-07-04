@@ -53,6 +53,7 @@ import com.example.antiwispr.ui.theme.Dimens
 fun SearchScreen(
     query: String,
     onQueryChange: (String) -> Unit,
+    chainKeys: Set<String> = emptySet(),
     onBack: () -> Unit,
     onOpen: (StoredTranscript) -> Unit,
 ) {
@@ -152,6 +153,7 @@ fun SearchScreen(
                                 TranscriptCard(
                                     t,
                                     query = trimmed,
+                                    chained = t.key in chainKeys,
                                     onClick = { onOpen(t) },
                                     onLongPress = {
                                         context.getSystemService(ClipboardManager::class.java)

@@ -69,6 +69,7 @@ import com.example.antiwispr.ui.theme.WordmarkStyle
 fun HomeScreen(
     setup: SetupStatus,
     recents: List<StoredTranscript>,
+    chainKeys: Set<String> = emptySet(),
     actions: SetupActions,
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
@@ -150,7 +151,7 @@ fun HomeScreen(
                         enter = fadeIn(tween(260, delayMillis = i * 45)) +
                             slideInVertically(tween(320, delayMillis = i * 45)) { it / 6 },
                     ) {
-                        TranscriptCard(t, onClick = { onOpenTranscript(t) })
+                        TranscriptCard(t, chained = t.key in chainKeys, onClick = { onOpenTranscript(t) })
                     }
                 }
             }
@@ -230,7 +231,7 @@ private fun StatusCard(setup: SetupStatus, actions: SetupActions, onFinishSetup:
                     MissingRow("Overlay over WhatsApp", setup.overlay, actions.requestOverlay)
                     MissingRow("File access", setup.files, actions.requestAllFiles)
                     MissingRow("Accessibility service", setup.accessibility, actions.openAccessibility)
-                    MissingRow("Whisper model", setup.modelReady, actions.downloadModel)
+                    MissingRow("Whisper model", setup.modelReady || setup.signedIn, actions.downloadModel)
                     MissingRow("Voice-note index", setup.indexReady, actions.buildIndex)
                     Spacer(Modifier.height(14.dp))
                     TacitButton("Finish setup", onFinishSetup, Modifier.fillMaxWidth())

@@ -8,6 +8,9 @@ import android.media.MediaMetadataRetriever
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import com.example.antiwispr.cloud.CloudClient
+import com.example.antiwispr.cloud.CloudPrefs
+import com.example.antiwispr.cloud.SyncEngine
 import java.io.File
 import java.util.concurrent.Executors
 
@@ -35,18 +38,22 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
     // window ("overlay doesn't appear"). Single thread — Whisper passes serialize naturally.
     private val transcribeExec = Executors.newSingleThreadExecutor { r -> Thread(r, "transcriber").apply { isDaemon = true } }
     private val indexer = IndexHolder.get(context)
-    private val transcriber: Transcriber = WhisperTranscriber(context)
     @Volatile private var listening = false
     @Volatile private var cancelRequested = false
     @Volatile private var listenThread: Thread? = null
     /** Bumped per play-tap; a superseded session's late transcript/summary must not repaint the new card. */
     @Volatile private var generation = 0
+    /** Chat title captured by the a11y service at play-tap (sender attribution). */
+    @Volatile private var sessionChatName: String? = null
+    /** The matched note's chain (if any) for the current session — target of "Summarize all N". */
+    @Volatile private var pendingChain: Chain? = null
     /** Set by the accessibility service; invoked on a confirmed match to pause WhatsApp playback. */
     @Volatile var onMatchPause: (() -> Unit)? = null
 
     init {
         // Dismissing the overlay (tap-away / ✕) also cancels an in-progress listen.
         overlay.onDismiss = { cancel("overlay dismissed") }
+        overlay.onSummarizeChain = { requestChainSummary() }
     }
 
     /** Abort an in-progress listen (called on pause, overlay-dismiss, etc.). Interrupts the worker so
@@ -58,8 +65,10 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         listenThread?.interrupt()
     }
 
-    fun onPlayTap(durationHintSec: Double?, timestamp: String?) {
+    fun onPlayTap(durationHintSec: Double?, timestamp: String?, chatName: String? = null) {
         if (listening) { AppLog.i("[orchestrator] already listening — ignoring new tap."); return }
+        sessionChatName = chatName
+        pendingChain = null
         // Kick an incremental refresh so a JUST-ARRIVED note gets fingerprinted (+auto-transcribed)
         // in the background; the streaming loop re-queries each tick, so it can match mid-listen.
         indexer.loadOrBuild { AppLog.i(it) }
@@ -223,15 +232,13 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         if (cached != null) {
             AppLog.i("[transcripts] cache hit for ${cand.name} — instant.")
             transcript = cached
+            // Stamp the chat name onto an already-cached record if we just learned it.
+            sessionChatName?.let { Transcripts.get(appContext).put(cand.file, cached, it) }
         } else {
             if (live()) overlay.setTranscript("transcribing…") // real ASR takes a few seconds (+ one-time model load)
-            transcript = try {
-                transcriber.transcribe(cand.file)
-            } catch (t: Throwable) {
-                AppLog.e("[orchestrator] transcribe threw: ${t.message}", t)
-                "[transcription error: ${t.message}]"
-            }
-            if (!transcript.startsWith("[")) Transcripts.get(appContext).put(cand.file, transcript) // don't cache errors/placeholders
+            // Cloud→local routing, caching and sync all live in TranscribeRouter (shared
+            // with chain summarization).
+            transcript = TranscribeRouter.transcribe(appContext, cand.file, sessionChatName)
         }
         AppLog.i("[orchestrator] transcript => $transcript")
         if (!live()) {
@@ -245,16 +252,41 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
             val cachedSummary = Transcripts.get(appContext).entry(cand.file)?.summary.orEmpty()
             when {
                 cachedSummary.isNotEmpty() -> overlay.setSummaryReady(cachedSummary)
-                LlmModel.isReady(appContext) -> {
+                Summarizer.canSummarize(appContext) -> {
                     overlay.setSummaryGenerating()
                     val key = Transcripts.keyFor(cand.file)
                     Summarizer.request(appContext, key, transcript) { raw ->
-                        if (!raw.startsWith("[")) Transcripts.get(appContext).putSummary(key, raw)
+                        if (!raw.startsWith("[")) {
+                            Transcripts.get(appContext).putSummary(key, raw)
+                            SyncEngine.requestSync(appContext)
+                        }
                         if (gen == generation) overlay.setSummaryReady(raw)
                     }
                 }
                 else -> overlay.setSummaryUnavailable()
             }
+        }
+
+        // Chain detection: does this note belong to a burst? Button-first — the card offers
+        // "Summarize all N"; a cached chain gist shows immediately with zero compute.
+        val chain = try { Chains.chainFor(appContext, cand.file) } catch (t: Throwable) {
+            AppLog.w("[chains] detection failed (non-fatal): ${t.message}"); null
+        }
+        pendingChain = chain
+        if (chain != null && gen == generation) {
+            AppLog.i("[chains] ${cand.name} is part ${chain.partIndexOf(cand.file)} of ${chain.size} (${chain.id}).")
+            overlay.setChainInfo(chain.partIndexOf(cand.file), chain.size)
+            ChainSummaries.get(appContext).find(chain.id)?.let { overlay.setChainSummaryReady(it.raw) }
+        }
+    }
+
+    /** Overlay's "Summarize all N" button. Runs on the chain thread; generation-guarded. */
+    private fun requestChainSummary() {
+        val chain = pendingChain ?: return
+        val gen = generation
+        overlay.setChainSummaryGenerating()
+        ChainSummarizer.request(appContext, chain, sessionChatName) { raw ->
+            if (gen == generation) overlay.setChainSummaryReady(raw)
         }
     }
 

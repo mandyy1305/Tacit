@@ -48,11 +48,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.antiwispr.ChainSummaries
+import com.example.antiwispr.ChainSummarizer
+import com.example.antiwispr.Chains
 import com.example.antiwispr.LlmModel
 import com.example.antiwispr.StoredTranscript
 import com.example.antiwispr.Summarizer
 import com.example.antiwispr.Transcripts
 import com.example.antiwispr.parseSummary
+import java.io.File
 import com.example.antiwispr.ui.components.GhostButton
 import com.example.antiwispr.ui.components.InkDivider
 import com.example.antiwispr.ui.components.ProgressCapsule
@@ -90,7 +94,16 @@ fun TranscriptDetailScreen(
         if (copied) { delay(1500); copied = false }
     }
 
-    val llmReady = remember { LlmModel.isReady(context) }
+    val canSummarize = remember { Summarizer.canSummarize(context) } // local model OR cloud
+
+    // Chain membership (files on disk; null on a restored library without the audio).
+    val chain = remember(transcript.key) {
+        runCatching { Chains.chainFor(context, File(transcript.path)) }.getOrNull()
+    }
+    var chainRaw by remember(transcript.key) {
+        mutableStateOf(chain?.let { ChainSummaries.get(context).find(it.id)?.raw }.orEmpty())
+    }
+    var chainGenerating by remember(transcript.key) { mutableStateOf(false) }
     fun generate() {
         generating = true
         Summarizer.request(context, transcript.key, transcript.text) { raw ->
@@ -99,10 +112,10 @@ fun TranscriptDetailScreen(
             generating = false
         }
     }
-    // Auto-generate on first open when the model is present but this note has no summary yet
-    // (covers watcher-transcribed notes, which are summarized on-demand by design).
+    // Auto-generate on first open when a summarizer is available but this note has no
+    // summary yet (covers watcher-transcribed notes, which are on-demand by design).
     LaunchedEffect(transcript.key) {
-        if (summaryRaw.isEmpty() && llmReady) generate()
+        if (summaryRaw.isEmpty() && canSummarize) generate()
     }
 
     Scaffold(containerColor = Color.Transparent) { pad ->
@@ -149,6 +162,24 @@ fun TranscriptDetailScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (chain != null) {
+                    Spacer(Modifier.height(14.dp))
+                    ChainSection(
+                        part = chain.partIndexOf(File(transcript.path)),
+                        count = chain.size,
+                        chatName = chain.chatName ?: transcript.chatName.ifEmpty { null },
+                        raw = chainRaw,
+                        generating = chainGenerating,
+                        canGenerate = canSummarize,
+                        onGenerate = {
+                            chainGenerating = true
+                            ChainSummarizer.request(context, chain, chain.chatName) { result ->
+                                chainRaw = result
+                                chainGenerating = false
+                            }
+                        },
+                    )
+                }
                 Spacer(Modifier.height(14.dp))
                 ReaderTabs(tab, onSelect = { tab = it })
                 Spacer(Modifier.height(14.dp))
@@ -164,7 +195,7 @@ fun TranscriptDetailScreen(
                         SummaryTab(
                             summaryRaw = summaryRaw,
                             generating = generating,
-                            llmReady = llmReady,
+                            llmReady = canSummarize,
                             onRegenerate = { generate() },
                             onOpenSettings = onOpenSettings,
                         )
@@ -236,6 +267,74 @@ fun TranscriptDetailScreen(
             },
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         )
+    }
+}
+
+/** "Part 2 of 4 · sent together · Mom" + the chain gist (cached, generating, or a button). */
+@Composable
+private fun ChainSection(
+    part: Int,
+    count: Int,
+    chatName: String?,
+    raw: String,
+    generating: Boolean,
+    canGenerate: Boolean,
+    onGenerate: () -> Unit,
+) {
+    androidx.compose.material3.Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Text(
+                buildString {
+                    append("PART $part OF $count · SENT TOGETHER")
+                    if (!chatName.isNullOrBlank()) append(" · ${chatName.uppercase()}")
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
+            Spacer(Modifier.height(10.dp))
+            when {
+                generating -> ProgressCapsule(null, "Summarizing $count notes…")
+                raw.startsWith("[") -> Column {
+                    Text(
+                        raw.trim('[', ']'),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    GhostButton("Try again", onGenerate, enabled = canGenerate)
+                }
+                raw.isNotEmpty() -> {
+                    val parts = remember(raw) { parseSummary(raw) }
+                    Column {
+                        Text(
+                            parts.summary,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        if (parts.actions.isNotEmpty()) {
+                            Spacer(Modifier.height(10.dp))
+                            parts.actions.forEach { action ->
+                                Row(Modifier.padding(vertical = 2.dp)) {
+                                    Text("–", style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.tertiary)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(action, style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface)
+                                }
+                            }
+                        }
+                    }
+                }
+                else -> GhostButton(
+                    "Summarize the chain ($count notes)",
+                    onGenerate,
+                    enabled = canGenerate,
+                )
+            }
+        }
     }
 }
 
@@ -325,12 +424,12 @@ private fun SummaryTab(
         !llmReady -> Column {
             Text(
                 "Summaries turn each note into a short brief with action items — " +
-                    "generated entirely on this phone.",
+                    "on this phone, or via your cloud account.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(14.dp))
-            TacitButton("Download the summary model", onOpenSettings, Modifier.fillMaxWidth())
+            TacitButton("Set up summaries", onOpenSettings, Modifier.fillMaxWidth())
         }
         else -> ProgressCapsule(null, "Summarizing on this phone…") // auto-start in flight
     }

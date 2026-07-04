@@ -148,6 +148,19 @@ internal object ModelDownloads {
     }
 }
 
+/** Process-wide single WhisperTranscriber (one recognizer = one copy of the model in RAM).
+ *  Shared by the play-tap pipeline and chain summarization. */
+object TranscriberHolder {
+    @Volatile private var instance: WhisperTranscriber? = null
+    fun get(context: Context): WhisperTranscriber {
+        instance?.let { return it }
+        synchronized(this) {
+            instance?.let { return it }
+            return WhisperTranscriber(context.applicationContext).also { instance = it }
+        }
+    }
+}
+
 class WhisperTranscriber(context: Context) : Transcriber {
 
     companion object {
@@ -196,6 +209,9 @@ class WhisperTranscriber(context: Context) : Transcriber {
         }
     }
 
+    // Synchronized: with the shared TranscriberHolder instance, concurrent callers (orchestrator
+    // worker vs chain summarizer) must serialize — sherpa streams aren't cross-thread safe.
+    @Synchronized
     override fun transcribe(file: File): String {
         if (!WhisperModel.isReady(appContext))
             return "[whisper model not downloaded — tap 'Download Whisper model' in the app]"

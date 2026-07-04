@@ -141,10 +141,28 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         }
 
         if (Toggles.orchestrationEnabled) {
-            orchestrator.onPlayTap(null, timestamp) // duration unused; index handles identification
+            val chatName = currentChatTitle()
+            if (chatName != null) AppLog.i("[a11y] chat = \"$chatName\"")
+            orchestrator.onPlayTap(null, timestamp, chatName) // duration unused; index handles identification
         } else {
             AppLog.i("[a11y] orchestration disabled — skipping capture/match/transcribe.")
         }
+    }
+
+    /** Best-effort chat title from the conversation screen (for sender attribution).
+     *  If WhatsApp renames the id, we just lose the label — never the pipeline. */
+    private fun currentChatTitle(): String? = try {
+        val root = rootInActiveWindow
+        val direct = root
+            ?.findAccessibilityNodeInfosByViewId("com.whatsapp:id/conversation_contact_name")
+            ?.firstOrNull()?.text?.toString()?.trim()
+        if (direct.isNullOrEmpty()) {
+            AppLog.i("[a11y] chat title not found (id may have changed — check a diagnostic dump).")
+            null
+        } else direct
+    } catch (e: Exception) {
+        AppLog.w("[a11y] chat title read failed (non-fatal): ${e.message}")
+        null
     }
 
     // ---- detection --------------------------------------------------------------

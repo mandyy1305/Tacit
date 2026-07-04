@@ -50,6 +50,7 @@ object OverlayPreviewDriver {
                 "your calendar. Baaki sab theek hai, mummy ko bola maine ki hum Sunday ko " +
                 "aayenge lunch pe. Chalo, see you tomorrow!"
         )
+        o.setChainInfo(2, 4)
         Thread.sleep(700)
         o.setSummaryGenerating()
         Thread.sleep(2000)
@@ -61,6 +62,21 @@ object OverlayPreviewDriver {
                 "- Banker ko 5 baje se pehle call karna\n" +
                 "- 23rd ke liye calendar block karna\n" +
                 "- Sunday lunch pe mummy ke ghar jana"
+        )
+        // The driver can't tap the "Summarize all 4" button — auto-show the chain gist
+        // a few seconds later so the whole chain UI is previewable.
+        Thread.sleep(4000)
+        o.setChainSummaryGenerating()
+        Thread.sleep(1800)
+        o.setChainSummaryReady(
+            "SUMMARY: Poora plan set hai — kal office ke baad documents exchange, " +
+                "banker ka kaam aaj hi, 23rd ka event confirm, aur Sunday family lunch. " +
+                "Sabse zaroori: banker ko 5 baje se pehle call karna.\n" +
+                "ACTIONS:\n" +
+                "- Banker ko aaj 5 baje se pehle call karna (sabse urgent)\n" +
+                "- Kal lease agreement aur dono ID proofs le jana\n" +
+                "- 23rd ke liye calendar block karna\n" +
+                "- Sunday ko mummy ke ghar lunch"
         )
     }
 
