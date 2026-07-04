@@ -106,7 +106,7 @@ class Indexer(private val appContext: Context) {
                     try {
                         val text = transcriber.transcribe(f)
                         if (!text.startsWith("[")) {
-                            Transcripts.get(appContext).put(f, text)
+                            Transcripts.get(appContext).put(f, text, source = "local")
                             onProgress("[indexer] auto-transcribed new note ${f.name}.")
                         }
                     } catch (e: Exception) { AppLog.w("[indexer] auto-transcribe failed ${f.name}: ${e.message}") }

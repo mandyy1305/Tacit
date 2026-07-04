@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
+import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -17,6 +18,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.core.content.ContextCompat
 import com.example.antiwispr.AppLog
+import com.example.antiwispr.ChainSummaries
 import com.example.antiwispr.Chains
 import com.example.antiwispr.DetectionHealth
 import com.example.antiwispr.IndexHolder
@@ -24,6 +26,7 @@ import com.example.antiwispr.LlmModel
 import com.example.antiwispr.ProjectionService
 import com.example.antiwispr.StoredTranscript
 import com.example.antiwispr.Toggles
+import com.example.antiwispr.TranscribeRouter
 import com.example.antiwispr.Transcripts
 import com.example.antiwispr.VoiceNoteWatcher
 import com.example.antiwispr.VoiceNotes
@@ -31,13 +34,18 @@ import com.example.antiwispr.WhatsAppAccessibilityService
 import com.example.antiwispr.WhisperModel
 import com.example.antiwispr.cloud.CloudClient
 import com.example.antiwispr.cloud.CloudPrefs
+import com.example.antiwispr.cloud.CloudSttLanguage
+import com.example.antiwispr.cloud.CloudSttMode
 import com.example.antiwispr.cloud.FirebaseBootstrap
 import com.example.antiwispr.cloud.SyncEngine
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 /** Everything the UI needs to know about permissions, model, index, and session state. */
 data class SetupStatus(
@@ -67,6 +75,8 @@ data class SetupStatus(
     val cloudBaseUrl: String = "",
     val cloudTranscription: Boolean = true,
     val cloudSummaries: Boolean = true,
+    val sttMode: CloudSttMode = CloudSttMode.DEFAULT,
+    val sttLanguage: CloudSttLanguage = CloudSttLanguage.DEFAULT,
     val sessionActive: Boolean = false,
     val transcriptCount: Int = 0,
     val detection: String = "",
@@ -96,6 +106,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _recents = MutableStateFlow<List<StoredTranscript>>(emptyList())
     val recents = _recents.asStateFlow()
+
+    /** The full library, newest first (History screen): synced-from-cloud + locally made. */
+    private val _history = MutableStateFlow<List<StoredTranscript>>(emptyList())
+    val history = _history.asStateFlow()
 
     /** Keys of transcripts that belong to a chain (for list badges). */
     private val _chainKeys = MutableStateFlow<Set<String>>(emptySet())
@@ -158,11 +172,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             cloudBaseUrl = CloudPrefs.baseUrl(ctx),
             cloudTranscription = CloudPrefs.cloudTranscription(ctx),
             cloudSummaries = CloudPrefs.cloudSummaries(ctx),
+            sttMode = CloudSttMode.fromWire(CloudPrefs.sttMode(ctx)),
+            sttLanguage = CloudSttLanguage.fromWire(CloudPrefs.sttLanguage(ctx)),
             sessionActive = ProjectionService.sessionActive,
             transcriptCount = Transcripts.get(ctx).count(),
             detection = DetectionHealth.summary(),
         )
-        _recents.value = Transcripts.get(ctx).all(20)
+        val all = Transcripts.get(ctx).all()
+        _recents.value = all.take(20)
+        _history.value = all
         _chainKeys.value = try { Chains.memberKeys(Transcripts.get(ctx)) } catch (_: Exception) { emptySet() }
     }
 
@@ -208,6 +226,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setCloudSummaries(v: Boolean) {
         CloudPrefs.setCloudSummaries(getApplication<Application>().applicationContext, v)
         AppLog.i("cloudSummaries = $v"); refresh()
+    }
+
+    fun setSttMode(m: CloudSttMode) {
+        CloudPrefs.setSttMode(getApplication<Application>().applicationContext, m.wire)
+        AppLog.i("sttMode = ${m.wire}"); refresh()
+    }
+
+    fun setSttLanguage(l: CloudSttLanguage) {
+        CloudPrefs.setSttLanguage(getApplication<Application>().applicationContext, l.wire)
+        AppLog.i("sttLanguage = ${l.wire}"); refresh()
     }
 
     fun deleteWhisperModel() {
@@ -303,13 +331,51 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
+    /** True while a forced re-transcription runs (reader shows a spinner on the refresh icon). */
+    var retranscribing by mutableStateOf(false)
+        private set
+
+    /** Redo an existing transcript with the CURRENT STT settings (cloud mode/language or local).
+     *  The refresh action is only offered when the audio file is still on this phone. */
+    fun retranscribe(t: StoredTranscript) {
+        if (retranscribing) return
+        val ctx = getApplication<Application>().applicationContext
+        val file = File(t.path)
+        if (!file.exists()) { AppLog.w("[retranscribe] ${t.name} — audio missing, skipping."); return }
+        retranscribing = true
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                TranscribeRouter.transcribe(ctx, file, t.chatName.ifEmpty { null }, force = true)
+            }
+            if (result.startsWith("[")) {
+                AppLog.w("[retranscribe] ${t.name} failed: $result — keeping the old transcript.")
+                Toast.makeText(ctx, "Couldn't re-transcribe — ${result.trim('[', ']')}", Toast.LENGTH_LONG).show()
+            } else {
+                dropStaleChainGists(t) // gist was built from the old text
+                if (selectedTranscript?.key == t.key) selectedTranscript = Transcripts.get(ctx).entry(file)
+            }
+            retranscribing = false
+            refresh()
+        }
+    }
+
     /** Deletes a cached transcript; the note is re-transcribed on-demand next time it plays. */
     fun deleteTranscript(t: StoredTranscript) {
         val ctx = getApplication<Application>().applicationContext
         Transcripts.get(ctx).remove(t.key)
         SyncEngine.queueDeletion(ctx, t.key) // tombstone so the cloud copy dies too
+        dropStaleChainGists(t) // any burst gist built from this note is stale now
         if (selectedTranscript?.key == t.key) selectedTranscript = null
         refresh()
+    }
+
+    /** A chain gist is built from its members' transcripts — when a member is deleted or
+     *  re-transcribed, the cached gist no longer matches and must regenerate. */
+    private fun dropStaleChainGists(t: StoredTranscript) {
+        if (t.waDate > 0 && t.seq >= 0) {
+            val ctx = getApplication<Application>().applicationContext
+            ChainSummaries.get(ctx).removeContaining(t.waDate, t.seq)
+        }
     }
 
     fun folderReport(): String = VoiceNotes.report()

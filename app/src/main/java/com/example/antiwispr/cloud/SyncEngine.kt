@@ -89,11 +89,11 @@ object SyncEngine {
                     key = r.key, path = r.path, name = r.name,
                     waDate = r.waDate, seq = r.seq, durationSec = -1.0,
                     text = r.text, updatedAt = r.updatedAtMs, summary = r.summary,
-                    chatName = r.chatName,
+                    chatName = r.chatName, source = r.source,
                 )
             }
-            val deletedKeys = page.filter { it.deletedAtMs > 0L }.map { it.key }
-            totalMerged += store.applyRemote(upserts, deletedKeys)
+            val deletions = page.filter { it.deletedAtMs > 0L }.map { it.key to it.deletedAtMs }
+            totalMerged += store.applyRemote(upserts, deletions)
             since = page.maxOf { it.updatedAtMs }
             CloudPrefs.setLastPullMs(ctx, since)
             if (page.size < 1000) break

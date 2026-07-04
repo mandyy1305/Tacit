@@ -14,9 +14,12 @@ import java.io.File
  */
 object TranscribeRouter {
 
-    fun transcribe(context: Context, file: File, chatName: String? = null): String {
+    fun transcribe(context: Context, file: File, chatName: String? = null, force: Boolean = false): String {
         val ctx = context.applicationContext
-        Transcripts.get(ctx).find(file)?.let { return it }
+        // Cache wins over current STT options: changing mode/language never re-transcribes
+        // old notes. [force] (the reader's re-transcribe action) bypasses the cache so the
+        // note gets a fresh pass with the CURRENT settings.
+        if (!force) Transcripts.get(ctx).find(file)?.let { return it }
 
         val cloudText = if (CloudClient.ready(ctx) && CloudPrefs.cloudTranscription(ctx)) {
             CloudClient.transcribe(ctx, file)?.also { AppLog.i("[cloud] transcribed ${file.name} via Sarvam.") }
@@ -30,7 +33,12 @@ object TranscribeRouter {
         }
 
         if (!transcript.startsWith("[")) {
-            Transcripts.get(ctx).put(file, transcript, chatName.orEmpty())
+            // A forced re-transcription replaces the text, so the old summary is stale — drop it
+            // (it regenerates lazily on the next Summary-tab open).
+            Transcripts.get(ctx).put(
+                file, transcript, chatName.orEmpty(), keepSummary = !force,
+                source = if (cloudText != null) "cloud" else "local",
+            )
             SyncEngine.requestSync(ctx)
         }
         return transcript

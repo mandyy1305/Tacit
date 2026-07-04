@@ -28,6 +28,7 @@ data class RemoteTranscript(
     val chatName: String,
     val updatedAtMs: Long,
     val deletedAtMs: Long, // 0 = alive; >0 = tombstone
+    val source: String = "", // transcription engine: "cloud" | "local"; "" = unknown/legacy
 )
 
 /**
@@ -100,6 +101,7 @@ object CloudClient {
                 put("chatName", r.chatName)
                 put("updatedAtMs", r.updatedAtMs)
                 if (r.deletedAtMs > 0) put("deletedAtMs", r.deletedAtMs)
+                if (r.source.isNotEmpty()) put("source", r.source)
             })
         }
         val req = request(ctx, "/v1/transcripts")
@@ -134,6 +136,7 @@ object CloudClient {
                         chatName = o.optString("chatName"),
                         updatedAtMs = o.getLong("updatedAtMs"),
                         deletedAtMs = o.optLong("deletedAtMs", 0L),
+                        source = o.optString("source"),
                     )
                 }
             }
@@ -146,6 +149,8 @@ object CloudClient {
     fun transcribe(ctx: Context, file: File): String? {
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
             .addFormDataPart("file", file.name, file.asRequestBody("audio/ogg".toMediaType()))
+            .addFormDataPart("mode", CloudSttMode.fromWire(CloudPrefs.sttMode(ctx)).wire)
+            .addFormDataPart("language_code", CloudSttLanguage.fromWire(CloudPrefs.sttLanguage(ctx)).wire)
             .build()
         val req = request(ctx, "/v1/transcribe")?.post(body)?.build() ?: return null
         return try {
@@ -199,5 +204,5 @@ object CloudClient {
 fun StoredTranscript.toRemote(): RemoteTranscript = RemoteTranscript(
     key = key, path = path, name = name, waDate = waDate, seq = seq,
     text = text, summary = summary, chatName = chatName,
-    updatedAtMs = updatedAt, deletedAtMs = 0L,
+    updatedAtMs = updatedAt, deletedAtMs = 0L, source = source,
 )

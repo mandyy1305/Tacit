@@ -39,8 +39,10 @@ class OverlayController(private val ctx: Context) {
     @Volatile private var onShareAction: (() -> Unit)? = null
     /** Invoked when the user dismisses the card (tap-away / ✕). Orchestrator uses it to cancel a listen. */
     @Volatile var onDismiss: (() -> Unit)? = null
-    /** Invoked by the card's "Summarize all N" button (chain summaries). */
-    @Volatile var onSummarizeChain: (() -> Unit)? = null
+    /** Invoked by the card's "Transcribe all N" chain toggle with the new desired state. */
+    @Volatile var onToggleChain: ((Boolean) -> Unit)? = null
+    /** Invoked when the user opens the Summary tab and no summary exists yet (lazy generation). */
+    @Volatile var onRequestSummary: (() -> Unit)? = null
     /** True once the user dismissed the card; blocks a still-running listen from re-creating it. */
     @Volatile private var dismissed = false
     /** When a result is showing, ignore outside-touch dismissal (incl. our own pause-on-match click). */
@@ -156,11 +158,22 @@ class OverlayController(private val ctx: Context) {
         state.value = state.value.copy(summaryState = SummaryState.GENERATING)
     }
 
-    /** Summary tab: raw "SUMMARY:/ACTIONS:" text (bracket-prefixed = error, shown as-is). */
+    /** Summary tab: raw "SUMMARY:/ACTIONS:" text (bracket-prefixed = error, shown as-is).
+     *  Clears [OverlayUiState.chainSummary] — a single-note result must not wear the chain label. */
     fun setSummaryReady(raw: String) = onMain {
         if (dropUpdate("summary")) return@onMain
         ensureWindow()
-        state.value = state.value.copy(summaryState = SummaryState.READY, summaryRaw = raw)
+        state.value = state.value.copy(
+            summaryState = SummaryState.READY, summaryRaw = raw, chainSummary = false,
+        )
+    }
+
+    /** Summary tab back to idle (nothing shown, generation not started) — used when the chain
+     *  toggle flips what the tab should contain and the new content isn't cached yet. */
+    fun setSummaryIdle() = onMain {
+        if (dropUpdate("summary(idle)")) return@onMain
+        ensureWindow()
+        state.value = state.value.copy(summaryState = SummaryState.NONE, chainSummary = false)
     }
 
     /** Summary tab: model not downloaded — show the settings hint. */
@@ -174,6 +187,20 @@ class OverlayController(private val ctx: Context) {
     fun setChainInfo(part: Int, count: Int) = onMain {
         if (dropUpdate("chain info")) return@onMain
         state.value = state.value.copy(chainPart = part, chainCount = count)
+    }
+
+    /** Chain mode on/off — the Transcript tab covers the whole burst vs just this note. */
+    fun setChainMode(on: Boolean) = onMain {
+        if (dropUpdate("chain mode")) return@onMain
+        ensureWindow()
+        state.value = state.value.copy(chainMode = on)
+    }
+
+    /** Per-part transcripts for chain mode (progressive; null entries are still transcribing). */
+    fun setChainParts(parts: List<String?>) = onMain {
+        if (dropUpdate("chain parts")) return@onMain
+        ensureWindow()
+        state.value = state.value.copy(chainParts = parts)
     }
 
     /** Chain gist is being generated (transcribe members + summarize). */
@@ -221,7 +248,8 @@ class OverlayController(private val ctx: Context) {
                         onClose = { dismiss() },
                         onShare = { onShareAction?.invoke() },
                         onCopy = { text -> copyText(text) },
-                        onSummarizeChain = { onSummarizeChain?.invoke() },
+                        onToggleChain = { on -> onToggleChain?.invoke(on) },
+                        onRequestSummary = { onRequestSummary?.invoke() },
                         onExitFinished = { removeWindow() },
                     )
                 }

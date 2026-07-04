@@ -9,17 +9,21 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -48,6 +52,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.antiwispr.Toggles
 import com.example.antiwispr.cloud.CloudAuth
+import com.example.antiwispr.cloud.CloudSttLanguage
+import com.example.antiwispr.cloud.CloudSttMode
 import com.example.antiwispr.ui.AppViewModel
 import com.example.antiwispr.ui.SetupStatus
 import com.example.antiwispr.ui.ToggleKey
@@ -78,6 +84,8 @@ fun SettingsScreen(
     var confirmDeleteWhisper by remember { mutableStateOf(false) }
     var confirmDeleteLlm by remember { mutableStateOf(false) }
     var showFolderReport by remember { mutableStateOf(false) }
+    var showModeSheet by remember { mutableStateOf(false) }
+    var showLanguageSheet by remember { mutableStateOf(false) }
     var devOpen by remember { mutableStateOf(false) }
     var signInError by remember { mutableStateOf<String?>(null) }
 
@@ -165,9 +173,19 @@ fun SettingsScreen(
                         }
                         ToggleRow(
                             "Cloud transcription",
-                            "Sarvam AI via your server — sharper Hinglish than on-device Whisper.",
+                            "Sarvam AI via your server — pick output style and language below.",
                             initial = setup.cloudTranscription,
                         ) { vm.setCloudTranscription(it) }
+                        AnimatedVisibility(
+                            visible = setup.cloudTranscription,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut(),
+                        ) {
+                            Column {
+                                PickerRow("Output style", setup.sttMode.label) { showModeSheet = true }
+                                PickerRow("Spoken language", setup.sttLanguage.label) { showLanguageSheet = true }
+                            }
+                        }
                         ToggleRow(
                             "Cloud summaries",
                             "gpt-4o-mini via your server — better summaries and action items.",
@@ -474,6 +492,29 @@ fun SettingsScreen(
             }
         }
     }
+
+    if (showModeSheet) {
+        OptionPickerSheet(
+            title = "Output style",
+            options = CloudSttMode.entries,
+            selected = setup.sttMode,
+            label = { it.label },
+            description = { it.description },
+            onSelect = { vm.setSttMode(it); showModeSheet = false },
+            onDismiss = { showModeSheet = false },
+        )
+    }
+
+    if (showLanguageSheet) {
+        OptionPickerSheet(
+            title = "Spoken language",
+            options = CloudSttLanguage.entries,
+            selected = setup.sttLanguage,
+            label = { it.label },
+            onSelect = { vm.setSttLanguage(it); showLanguageSheet = false },
+            onDismiss = { showLanguageSheet = false },
+        )
+    }
 }
 
 /** Dev-facing server URL (e.g. http://192.168.1.5:8080 while the Go server runs locally). */
@@ -526,6 +567,98 @@ private fun ToggleRow(
                 checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
             ),
         )
+    }
+}
+
+/** Tappable row showing the current choice; opens a picker sheet. */
+@Composable
+private fun PickerRow(title: String, value: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                value,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
+            tint = MaterialTheme.colorScheme.outline,
+        )
+    }
+}
+
+/** Single-select bottom sheet; the language list is long, so rows live in a LazyColumn. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun <T> OptionPickerSheet(
+    title: String,
+    options: List<T>,
+    selected: T,
+    label: (T) -> String,
+    description: (T) -> String? = { null },
+    onSelect: (T) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Column(Modifier.padding(horizontal = Dimens.screenPad)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(4.dp))
+            LazyColumn(contentPadding = PaddingValues(bottom = 32.dp)) {
+                items(options) { option ->
+                    val isSelected = option == selected
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(option) }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                label(option),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface,
+                            )
+                            description(option)?.let {
+                                Text(
+                                    it,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        if (isSelected) {
+                            Icon(
+                                Icons.Filled.Check, contentDescription = "Selected",
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    InkDivider()
+                }
+            }
+        }
     }
 }
 

@@ -27,6 +27,8 @@ data class OverlayUiState(
     val chainPart: Int = 0,              // this note's position in its burst (0 = no chain)
     val chainCount: Int = 0,             // burst size (0/1 = no chain)
     val chainSummary: Boolean = false,   // Summary tab currently shows the CHAIN gist
+    val chainMode: Boolean = false,      // "Transcribe all N" toggle: tabs cover the whole burst
+    val chainParts: List<String?> = emptyList(), // per-part transcripts in chain mode; null = pending
     val copied: Boolean = false,
 )
 

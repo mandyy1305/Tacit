@@ -22,7 +22,8 @@ data class StoredTranscript(
     val text: String,
     val updatedAt: Long,
     val summary: String = "",  // raw LLM "SUMMARY:/ACTIONS:" text; "" = not generated (v2)
-    val chatName: String = ""  // WhatsApp chat title captured at play-tap; "" = unknown (v3)
+    val chatName: String = "", // WhatsApp chat title captured at play-tap; "" = unknown (v3)
+    val source: String = ""    // transcription engine: "cloud" | "local"; "" = unknown/legacy (v4)
 )
 
 /**
@@ -33,7 +34,7 @@ data class StoredTranscript(
  */
 object Transcripts {
     private const val MAGIC = 0x41575458 // "AWTX"
-    private const val VERSION = 3 // v2 added summary; v3 adds chatName; older stores migrate with ""
+    private const val VERSION = 4 // v2 added summary; v3 chatName; v4 source; older stores migrate with ""
 
     @Volatile private var loaded = false
     private lateinit var file: File
@@ -65,9 +66,12 @@ object Transcripts {
 
     /**
      * Merge remote state (cloud-sync pull): last-write-wins upserts + tombstone deletes.
-     * One save() for the whole batch. Returns how many records changed.
+     * Deletes are LWW too — a tombstone only wins over a LOCAL record that is older than the
+     * deletion, so a note re-transcribed after its delete can't be re-killed by a stale
+     * tombstone echoing back from the server. One save() for the whole batch.
+     * Returns how many records changed.
      */
-    @Synchronized fun applyRemote(upserts: List<StoredTranscript>, deletedKeys: List<String>): Int {
+    @Synchronized fun applyRemote(upserts: List<StoredTranscript>, deletions: List<Pair<String, Long>>): Int {
         var changed = 0
         for (t in upserts) {
             val cur = map[t.key]
@@ -76,7 +80,10 @@ object Transcripts {
                 changed++
             }
         }
-        for (k in deletedKeys) if (map.remove(k) != null) changed++
+        for ((k, deletedAtMs) in deletions) {
+            val cur = map[k] ?: continue
+            if (cur.updatedAt < deletedAtMs && map.remove(k) != null) changed++
+        }
         if (changed > 0) {
             save()
             AppLog.i("[transcripts] merged $changed change(s) from cloud.")
@@ -90,22 +97,25 @@ object Transcripts {
     /** Full stored record for this file (transcript + summary), or null. */
     @Synchronized fun entry(f: File): StoredTranscript? = map[keyFor(f)]
 
-    /** Attach/replace the LLM summary on an existing record. No-op if the record is gone. */
+    /** Attach/replace the LLM summary on an existing record. No-op if the record is gone.
+     *  Bumps updatedAt — the sync push cursor is changedSince(updatedAt), so a summary attached
+     *  after its transcript was pushed would otherwise never reach the cloud. */
     @Synchronized fun putSummary(key: String, summary: String) {
         val t = map[key] ?: return
-        map[key] = t.copy(summary = summary)
+        map[key] = t.copy(summary = summary, updatedAt = System.currentTimeMillis())
         save()
     }
 
-    @Synchronized fun put(f: File, text: String, chatName: String = "") {
+    @Synchronized fun put(f: File, text: String, chatName: String = "", keepSummary: Boolean = true, source: String = "") {
         val p = VoiceNotes.parseWhatsAppName(f.name)
         val existing = map[keyFor(f)]
         map[keyFor(f)] = StoredTranscript(
             key = keyFor(f), path = f.absolutePath, name = f.name,
             waDate = p?.dateYmd ?: -1, seq = p?.seq ?: -1,
             durationSec = -1.0, text = text, updatedAt = System.currentTimeMillis(),
-            summary = existing?.summary ?: "",
+            summary = if (keepSummary) existing?.summary ?: "" else "", // re-transcribe voids it
             chatName = chatName.ifEmpty { existing?.chatName ?: "" }, // never downgrade a known chat
+            source = source.ifEmpty { existing?.source ?: "" }, // keep the known engine on re-stamps
         )
         save()
     }
@@ -149,7 +159,8 @@ object Transcripts {
                 val text = din.readUTF(); val updated = din.readLong()
                 val summary = if (version >= 2) din.readUTF() else "" // v1 → migrate with no summary
                 val chatName = if (version >= 3) din.readUTF() else "" // v1/v2 → unknown chat
-                map[key] = StoredTranscript(key, path, name, waDate, seq, dur, text, updated, summary, chatName)
+                val source = if (version >= 4) din.readUTF() else "" // v1-v3 → unknown engine
+                map[key] = StoredTranscript(key, path, name, waDate, seq, dur, text, updated, summary, chatName, source)
             }
             if (version < VERSION) AppLog.i("[transcripts] migrated store v$version → v$VERSION (${map.size} records).")
         } catch (e: Exception) {
@@ -170,6 +181,7 @@ object Transcripts {
                 dos.writeUTF(t.text); dos.writeLong(t.updatedAt)
                 dos.writeUTF(t.summary)
                 dos.writeUTF(t.chatName)
+                dos.writeUTF(t.source)
             }
             dos.flush()
             DataOutputStream(fos).writeLong(crc.value)

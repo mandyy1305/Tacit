@@ -50,6 +50,23 @@ object ChainSummaries {
         if (map.remove(id) != null) save()
     }
 
+    /** Drop every cached gist whose chain contains note [seq] of [date] — used when a member's
+     *  transcript is deleted or re-transcribed (the gist was built from the old text). Works
+     *  from the id alone ("date:firstSeq-lastSeq"), so it needs no audio on disk. */
+    @Synchronized fun removeContaining(date: Int, seq: Int) {
+        val stale = map.keys.filter { id ->
+            val m = ID_RX.matchEntire(id) ?: return@filter false
+            m.groupValues[1].toInt() == date &&
+                seq >= m.groupValues[2].toInt() && seq <= m.groupValues[3].toInt()
+        }
+        if (stale.isEmpty()) return
+        stale.forEach { map.remove(it) }
+        save()
+        AppLog.i("[chains] dropped ${stale.size} gist(s) containing $date seq $seq (member changed).")
+    }
+
+    private val ID_RX = Regex("""^(\d+):(\d+)-(\d+)$""")
+
     // ---- persistence ------------------------------------------------------------
 
     private fun load() {

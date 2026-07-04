@@ -31,7 +31,43 @@ object OverlayPreviewDriver {
         }, "overlay-preview").apply { isDaemon = true }.start()
     }
 
+    @Volatile private var previewChainMode = false
+
     private fun happyPath(o: OverlayController) {
+        // Wire the lazy actions the way Orchestrator does — the previewer taps the Summary tab
+        // and the "Transcribe all 4" toggle and watches the real interactions play out.
+        // (Callbacks fire on main; the fake latency runs on its own daemon thread.)
+        previewChainMode = false
+        o.onRequestSummary = {
+            if (previewChainMode) {
+                o.setChainSummaryGenerating()
+                Thread({ Thread.sleep(1800); o.setChainSummaryReady(FAKE_CHAIN_SUMMARY) }, "preview-chain")
+                    .apply { isDaemon = true }.start()
+            } else {
+                o.setSummaryGenerating()
+                Thread({ Thread.sleep(2000); o.setSummaryReady(FAKE_SUMMARY) }, "preview-summary")
+                    .apply { isDaemon = true }.start()
+            }
+        }
+        o.onToggleChain = { on ->
+            previewChainMode = on
+            o.setChainMode(on)
+            if (on) {
+                o.setSummaryIdle()
+                o.setChainParts(listOf(null, FAKE_PART_2, null, null)) // part 2 = the played note
+                Thread({
+                    val parts = arrayOf<String?>(null, FAKE_PART_2, null, null)
+                    for (i in intArrayOf(0, 2, 3)) {
+                        Thread.sleep(1200)
+                        if (!previewChainMode) return@Thread
+                        parts[i] = FAKE_PARTS[i]
+                        o.setChainParts(parts.toList())
+                    }
+                }, "preview-chain-parts").apply { isDaemon = true }.start()
+            } else {
+                o.setSummaryIdle()
+            }
+        }
         o.showSpinner("Listening…")
         o.setInfo(null, "10:42")
         Thread.sleep(700); o.setStatus("listening 0.7s… (no match yet)")
@@ -51,34 +87,38 @@ object OverlayPreviewDriver {
                 "aayenge lunch pe. Chalo, see you tomorrow!"
         )
         o.setChainInfo(2, 4)
-        Thread.sleep(700)
-        o.setSummaryGenerating()
-        Thread.sleep(2000)
-        o.setSummaryReady(
-            "SUMMARY: Kal office ke baad milna tay hua hai; documents ready hain aur " +
-                "23rd ka venue confirm ho gaya hai.\n" +
-                "ACTIONS:\n" +
-                "- Lease agreement aur dono ID proofs kal le jana\n" +
-                "- Banker ko 5 baje se pehle call karna\n" +
-                "- 23rd ke liye calendar block karna\n" +
-                "- Sunday lunch pe mummy ke ghar jana"
-        )
-        // The driver can't tap the "Summarize all 4" button — auto-show the chain gist
-        // a few seconds later so the whole chain UI is previewable.
-        Thread.sleep(4000)
-        o.setChainSummaryGenerating()
-        Thread.sleep(1800)
-        o.setChainSummaryReady(
-            "SUMMARY: Poora plan set hai — kal office ke baad documents exchange, " +
-                "banker ka kaam aaj hi, 23rd ka event confirm, aur Sunday family lunch. " +
-                "Sabse zaroori: banker ko 5 baje se pehle call karna.\n" +
-                "ACTIONS:\n" +
-                "- Banker ko aaj 5 baje se pehle call karna (sabse urgent)\n" +
-                "- Kal lease agreement aur dono ID proofs le jana\n" +
-                "- 23rd ke liye calendar block karna\n" +
-                "- Sunday ko mummy ke ghar lunch"
-        )
     }
+
+    private const val FAKE_SUMMARY =
+        "SUMMARY: Kal office ke baad milna tay hua hai; documents ready hain aur " +
+            "23rd ka venue confirm ho gaya hai.\n" +
+            "ACTIONS:\n" +
+            "- Lease agreement aur dono ID proofs kal le jana\n" +
+            "- Banker ko 5 baje se pehle call karna\n" +
+            "- 23rd ke liye calendar block karna\n" +
+            "- Sunday lunch pe mummy ke ghar jana"
+
+    private const val FAKE_CHAIN_SUMMARY =
+        "SUMMARY: Poora plan set hai — kal office ke baad documents exchange, " +
+            "banker ka kaam aaj hi, 23rd ka event confirm, aur Sunday family lunch. " +
+            "Sabse zaroori: banker ko 5 baje se pehle call karna.\n" +
+            "ACTIONS:\n" +
+            "- Banker ko aaj 5 baje se pehle call karna (sabse urgent)\n" +
+            "- Kal lease agreement aur dono ID proofs le jana\n" +
+            "- 23rd ke liye calendar block karna\n" +
+            "- Sunday ko mummy ke ghar lunch"
+
+    private const val FAKE_PART_2 =
+        "Haan bhai, kal milte hain office ke baad. I'll bring the documents you asked for — " +
+            "the lease agreement and both ID proofs."
+    private val FAKE_PARTS = arrayOf(
+        "Arre sun, ek important baat batani thi tujhe. Do teen cheezein hain actually.",
+        FAKE_PART_2,
+        "Agar time mile toh please banker ko call kar lena before five, warna appointment " +
+            "shift ho jayegi to next week.",
+        "Aur haan, Priya said the venue is confirmed for the twenty-third, so block your " +
+            "calendar. Sunday ko mummy ke ghar lunch pe aana hai, bhoolna mat!",
+    )
 
     private fun degraded(o: OverlayController) {
         o.showSpinner("Listening…")

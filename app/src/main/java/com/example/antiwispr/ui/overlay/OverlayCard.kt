@@ -97,7 +97,8 @@ fun TacitOverlayCard(
     onClose: () -> Unit,
     onShare: () -> Unit,
     onCopy: (String) -> Unit,
-    onSummarizeChain: () -> Unit = {},
+    onToggleChain: (Boolean) -> Unit = {},
+    onRequestSummary: () -> Unit = {},
     onExitFinished: () -> Unit,
 ) {
     val enterState = remember { MutableTransitionState(false) }
@@ -175,7 +176,7 @@ fun TacitOverlayCard(
                     OverlayPhase.LISTENING -> ListeningBody(state)
                     OverlayPhase.MATCHED -> MatchedBody(state)
                     OverlayPhase.TRANSCRIBING -> TranscribingBody(state)
-                    OverlayPhase.TRANSCRIPT -> TranscriptBody(state, onCopy, onSummarizeChain)
+                    OverlayPhase.TRANSCRIPT -> TranscriptBody(state, onCopy, onToggleChain, onRequestSummary)
                     OverlayPhase.NO_MATCH -> NoMatchBody()
                     OverlayPhase.NOTICE -> NoticeBody(state)
                 }
@@ -402,13 +403,29 @@ private fun TranscribingShimmer() {
 }
 
 @Composable
-private fun TranscriptBody(state: OverlayUiState, onCopy: (String) -> Unit, onSummarizeChain: () -> Unit) {
-    // 0 = Summary (the point of the product), 1 = Transcript.
+private fun TranscriptBody(
+    state: OverlayUiState,
+    onCopy: (String) -> Unit,
+    onToggleChain: (Boolean) -> Unit,
+    onRequestSummary: () -> Unit,
+) {
+    // 0 = Transcript (default — instantly available), 1 = Summary (generated lazily the
+    // first time the user opens it).
     var tab by remember { mutableIntStateOf(0) }
     Column {
         MatchLine(state, animateBadge = false)
+        if (state.chainCount > 1) {
+            Spacer(Modifier.height(8.dp))
+            ChainTogglePill(state, onToggleChain)
+        }
         Spacer(Modifier.height(12.dp))
-        OverlayTabs(tab, onSelect = { tab = it })
+        OverlayTabs(tab, onSelect = { i ->
+            tab = i
+            // Lazy summaries: the first open of the Summary tab starts generation. NONE =
+            // idle (Orchestrator armed a pending request); READY/UNAVAILABLE/GENERATING
+            // never re-fire, and the state flips to GENERATING synchronously on this tap.
+            if (i == 1 && state.summaryState == SummaryState.NONE) onRequestSummary()
+        })
         Spacer(Modifier.height(10.dp))
         // Fade only, size snaps (`using null`) — the no-window-resize-animation rule.
         AnimatedContent(
@@ -418,11 +435,17 @@ private fun TranscriptBody(state: OverlayUiState, onCopy: (String) -> Unit, onSu
             label = "tab",
         ) { t ->
             Box(Modifier.verticalScroll(rememberScrollState())) {
-                if (t == 0) SummaryPane(state, onSummarizeChain) else TranscriptPane(state)
+                if (t == 0) TranscriptPane(state) else SummaryPane(state)
             }
         }
         Spacer(Modifier.height(10.dp))
-        val copyText = if (tab == 0) state.summaryRaw.orEmpty() else state.transcript.orEmpty()
+        val copyText = when {
+            tab == 1 -> state.summaryRaw.orEmpty()
+            state.chainMode && state.chainParts.any { it != null } ->
+                state.chainParts.mapIndexedNotNull { i, t -> t?.let { "Part ${i + 1}: $it" } }
+                    .joinToString("\n\n")
+            else -> state.transcript.orEmpty()
+        }
         if (copyText.isNotBlank()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Spacer(Modifier.weight(1f))
@@ -458,7 +481,7 @@ private fun OverlayTabs(selected: Int, onSelect: (Int) -> Unit) {
             .background(OverlayPalette.ink.copy(alpha = 0.06f))
             .padding(3.dp)
     ) {
-        listOf("Summary", "Transcript").forEachIndexed { i, label ->
+        listOf("Transcript", "Summary").forEachIndexed { i, label ->
             val active = i == selected
             Box(
                 Modifier
@@ -479,17 +502,72 @@ private fun OverlayTabs(selected: Int, onSelect: (Int) -> Unit) {
     }
 }
 
+/** "Transcribe all N" toggle — flips the card between this-note and whole-burst content. */
 @Composable
-private fun TranscriptPane(state: OverlayUiState) {
-    Text(
-        state.transcript.orEmpty(),
-        fontFamily = Inter, fontSize = 15.sp, lineHeight = 23.sp,
-        color = OverlayPalette.ink,
-    )
+private fun ChainTogglePill(state: OverlayUiState, onToggleChain: (Boolean) -> Unit) {
+    val on = state.chainMode
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .then(
+                if (on) Modifier.background(OverlayPalette.accentDeep)
+                else Modifier.border(1.dp, OverlayPalette.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+            )
+            .clickable { onToggleChain(!on) }
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    ) {
+        Text(
+            if (on) "All ${state.chainCount} notes ✓" else "Transcribe all ${state.chainCount}",
+            fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+            fontSize = 12.sp,
+            color = if (on) Color(0xFFFFF3E9) else OverlayPalette.accent,
+        )
+    }
 }
 
 @Composable
-private fun SummaryPane(state: OverlayUiState, onSummarizeChain: () -> Unit) {
+private fun TranscriptPane(state: OverlayUiState) {
+    if (state.chainMode && state.chainParts.isNotEmpty()) {
+        Column {
+            state.chainParts.forEachIndexed { i, part ->
+                if (i > 0) Spacer(Modifier.height(14.dp))
+                Text(
+                    if (i + 1 == state.chainPart) "PART ${i + 1} · THIS NOTE" else "PART ${i + 1}",
+                    fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+                    fontSize = 10.sp, letterSpacing = 1.5.sp,
+                    color = OverlayPalette.accent,
+                )
+                Spacer(Modifier.height(4.dp))
+                when {
+                    part == null -> Text(
+                        "transcribing…",
+                        fontFamily = Inter, fontSize = 13.sp,
+                        color = OverlayPalette.inkFaint,
+                    )
+                    part.startsWith("[") -> Text(
+                        humanizeNotice(part),
+                        fontFamily = Inter, fontSize = 13.sp,
+                        color = OverlayPalette.inkMuted,
+                    )
+                    else -> Text(
+                        part,
+                        fontFamily = Inter, fontSize = 15.sp, lineHeight = 23.sp,
+                        color = OverlayPalette.ink,
+                    )
+                }
+            }
+        }
+    } else {
+        Text(
+            state.transcript.orEmpty(),
+            fontFamily = Inter, fontSize = 15.sp, lineHeight = 23.sp,
+            color = OverlayPalette.ink,
+        )
+    }
+}
+
+@Composable
+private fun SummaryPane(state: OverlayUiState) {
     Column {
         if (state.chainSummary && state.chainCount > 1) {
             Text(
@@ -501,6 +579,9 @@ private fun SummaryPane(state: OverlayUiState, onSummarizeChain: () -> Unit) {
             Spacer(Modifier.height(6.dp))
         }
         when (state.summaryState) {
+            // NONE (lazy idle) renders the shimmer too — it is only visible for the sub-frame
+            // between the Summary-tab tap and setSummaryGenerating landing, so the two must
+            // look identical.
             SummaryState.GENERATING, SummaryState.NONE -> Column {
                 Text(
                     if (state.chainSummary && state.chainCount > 1)
@@ -559,23 +640,6 @@ private fun SummaryPane(state: OverlayUiState, onSummarizeChain: () -> Unit) {
                         }
                     }
                 }
-            }
-        }
-        // Button-first chain UX: offer the burst gist without surprising compute.
-        if (state.chainCount > 1 && !state.chainSummary) {
-            Spacer(Modifier.height(10.dp))
-            Box(
-                Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .border(1.dp, OverlayPalette.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                    .clickable(onClick = onSummarizeChain)
-                    .padding(horizontal = 12.dp, vertical = 7.dp),
-            ) {
-                Text(
-                    "Summarize all ${state.chainCount} →",
-                    fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-                    fontSize = 12.sp, color = OverlayPalette.accent,
-                )
             }
         }
     }

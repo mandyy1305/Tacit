@@ -31,6 +31,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.antiwispr.AppLog
 import com.example.antiwispr.ProjectionService
+import com.example.antiwispr.ui.history.HistoryScreen
 import com.example.antiwispr.ui.home.HomeScreen
 import com.example.antiwispr.ui.onboarding.OnboardingScreen
 import com.example.antiwispr.ui.search.SearchScreen
@@ -57,6 +58,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
     val context = LocalContext.current
     val setup by vm.setup.collectAsStateWithLifecycle()
     val recents by vm.recents.collectAsStateWithLifecycle()
+    val history by vm.history.collectAsStateWithLifecycle()
     val chainKeys by vm.chainKeys.collectAsStateWithLifecycle()
     val nav = rememberNavController()
 
@@ -174,8 +176,17 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 actions = actions,
                 onOpenSettings = { nav.navigate("settings") },
                 onOpenSearch = { nav.navigate("search") },
+                onOpenHistory = { nav.navigate("history") },
                 onOpenTranscript = { vm.selectedTranscript = it; nav.navigate("transcript") },
                 onFinishSetup = { nav.navigate("onboarding") },
+            )
+        }
+        composable("history") {
+            HistoryScreen(
+                history = history,
+                chainKeys = chainKeys,
+                onBack = { nav.popBackStack() },
+                onOpen = { vm.selectedTranscript = it; nav.navigate("transcript") },
             )
         }
         composable("search") {
@@ -192,6 +203,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 transcript = vm.selectedTranscript,
                 onBack = { nav.popBackStack() },
                 onDelete = { vm.deleteTranscript(it) }, // screen pops itself via the null guard
+                onRetranscribe = { vm.retranscribe(it) },
+                retranscribing = vm.retranscribing,
                 onOpenSettings = { nav.navigate("settings") },
             )
         }

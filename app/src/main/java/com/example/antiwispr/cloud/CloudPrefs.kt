@@ -23,6 +23,12 @@ object CloudPrefs {
     fun cloudSummaries(ctx: Context): Boolean = prefs(ctx).getBoolean("cloud_summaries", true)
     fun setCloudSummaries(ctx: Context, v: Boolean) = prefs(ctx).edit().putBoolean("cloud_summaries", v).apply()
 
+    fun sttMode(ctx: Context): String = prefs(ctx).getString("stt_mode", CloudSttMode.DEFAULT.wire)!!
+    fun setSttMode(ctx: Context, v: String) = prefs(ctx).edit().putString("stt_mode", v).apply()
+
+    fun sttLanguage(ctx: Context): String = prefs(ctx).getString("stt_language", CloudSttLanguage.DEFAULT.wire)!!
+    fun setSttLanguage(ctx: Context, v: String) = prefs(ctx).edit().putString("stt_language", v).apply()
+
     fun lastPullMs(ctx: Context): Long = prefs(ctx).getLong("last_pull_ms", 0L)
     fun setLastPullMs(ctx: Context, v: Long) = prefs(ctx).edit().putLong("last_pull_ms", v).apply()
 

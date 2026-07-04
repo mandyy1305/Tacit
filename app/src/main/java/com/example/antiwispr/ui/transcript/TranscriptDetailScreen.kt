@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,7 +27,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -55,6 +58,7 @@ import com.example.antiwispr.LlmModel
 import com.example.antiwispr.StoredTranscript
 import com.example.antiwispr.Summarizer
 import com.example.antiwispr.Transcripts
+import com.example.antiwispr.cloud.SyncEngine
 import com.example.antiwispr.parseSummary
 import java.io.File
 import com.example.antiwispr.ui.components.GhostButton
@@ -76,6 +80,8 @@ fun TranscriptDetailScreen(
     transcript: StoredTranscript?,
     onBack: () -> Unit,
     onDelete: (StoredTranscript) -> Unit = {},
+    onRetranscribe: (StoredTranscript) -> Unit = {},
+    retranscribing: Boolean = false,
     onOpenSettings: () -> Unit = {},
 ) {
     // Process-death restore (or a just-deleted transcript) lands here with no
@@ -85,11 +91,16 @@ fun TranscriptDetailScreen(
         return
     }
     val context = LocalContext.current
-    var tab by rememberSaveable(transcript.key) { mutableIntStateOf(0) } // 0 = Summary, 1 = Transcript
-    var summaryRaw by remember(transcript.key) { mutableStateOf(transcript.summary) }
-    var generating by remember(transcript.key) { mutableStateOf(false) }
+    var tab by rememberSaveable(transcript.key) { mutableIntStateOf(0) } // 0 = Transcript, 1 = Summary
+    // Keyed on updatedAt too: a re-transcription keeps the key (path|mtime|size) but swaps the
+    // record — the summary state must reset with it.
+    var summaryRaw by remember(transcript.key, transcript.updatedAt) { mutableStateOf(transcript.summary) }
+    var generating by remember(transcript.key, transcript.updatedAt) { mutableStateOf(false) }
     var copied by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var confirmRetranscribe by remember { mutableStateOf(false) }
+    // Re-transcribe needs the original audio; a record synced from another phone may not have it.
+    val audioAvailable = remember(transcript.key) { File(transcript.path).exists() }
     LaunchedEffect(copied) {
         if (copied) { delay(1500); copied = false }
     }
@@ -107,15 +118,18 @@ fun TranscriptDetailScreen(
     fun generate() {
         generating = true
         Summarizer.request(context, transcript.key, transcript.text) { raw ->
-            if (!raw.startsWith("[")) Transcripts.get(context).putSummary(transcript.key, raw)
+            if (!raw.startsWith("[")) {
+                Transcripts.get(context).putSummary(transcript.key, raw)
+                SyncEngine.requestSync(context)
+            }
             summaryRaw = raw
             generating = false
         }
     }
-    // Auto-generate on first open when a summarizer is available but this note has no
-    // summary yet (covers watcher-transcribed notes, which are on-demand by design).
-    LaunchedEffect(transcript.key) {
-        if (summaryRaw.isEmpty() && canSummarize) generate()
+    // Lazy: generate only when the user actually opens the Summary tab (first time). Also keyed
+    // on updatedAt so a re-transcription that lands while the Summary tab is open regenerates.
+    LaunchedEffect(tab, transcript.updatedAt) {
+        if (tab == 1 && summaryRaw.isEmpty() && canSummarize && !generating) generate()
     }
 
     Scaffold(containerColor = Color.Transparent) { pad ->
@@ -137,6 +151,22 @@ fun TranscriptDetailScreen(
                     )
                 }
                 Spacer(Modifier.weight(1f))
+                if (audioAvailable) {
+                    IconButton(onClick = { confirmRetranscribe = true }, enabled = !retranscribing) {
+                        if (retranscribing) {
+                            CircularProgressIndicator(
+                                Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            Icon(
+                                Icons.Filled.Refresh, contentDescription = "Re-transcribe",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
                 IconButton(onClick = { confirmDelete = true }) {
                     Icon(
                         Icons.Filled.Delete, contentDescription = "Delete transcript",
@@ -192,14 +222,6 @@ fun TranscriptDetailScreen(
                     label = "readerTab",
                 ) { t ->
                     if (t == 0) {
-                        SummaryTab(
-                            summaryRaw = summaryRaw,
-                            generating = generating,
-                            llmReady = canSummarize,
-                            onRegenerate = { generate() },
-                            onOpenSettings = onOpenSettings,
-                        )
-                    } else {
                         SelectionContainer {
                             Text(
                                 transcript.text,
@@ -207,12 +229,20 @@ fun TranscriptDetailScreen(
                                 color = MaterialTheme.colorScheme.onBackground,
                             )
                         }
+                    } else {
+                        SummaryTab(
+                            summaryRaw = summaryRaw,
+                            generating = generating,
+                            llmReady = canSummarize,
+                            onRegenerate = { generate() },
+                            onOpenSettings = onOpenSettings,
+                        )
                     }
                 }
                 Spacer(Modifier.height(32.dp))
             }
 
-            val activeText = if (tab == 0 && summaryRaw.isNotEmpty() && !summaryRaw.startsWith("["))
+            val activeText = if (tab == 1 && summaryRaw.isNotEmpty() && !summaryRaw.startsWith("["))
                 summaryRaw else transcript.text
             Row(
                 Modifier
@@ -239,6 +269,34 @@ fun TranscriptDetailScreen(
                 })
             }
         }
+    }
+
+    if (confirmRetranscribe) {
+        AlertDialog(
+            onDismissRequest = { confirmRetranscribe = false },
+            title = { Text("Re-transcribe this note?", style = MaterialTheme.typography.headlineSmall) },
+            text = {
+                Text(
+                    "Replaces the saved transcript and summary using your current " +
+                        "transcription settings.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRetranscribe = false
+                    onRetranscribe(transcript)
+                }) {
+                    Text("Re-transcribe", color = MaterialTheme.colorScheme.primary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRetranscribe = false }) {
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        )
     }
 
     if (confirmDelete) {
@@ -346,7 +404,7 @@ private fun ReaderTabs(selected: Int, onSelect: (Int) -> Unit) {
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .padding(3.dp)
     ) {
-        listOf("Summary", "Transcript").forEachIndexed { i, label ->
+        listOf("Transcript", "Summary").forEachIndexed { i, label ->
             val active = i == selected
             Box(
                 Modifier
