@@ -45,6 +45,14 @@ object CloudClient {
         .readTimeout(120, TimeUnit.SECONDS) // transcription of long notes takes a while
         .build()
 
+    // OkHttp's top-level message ("Failed to connect to …") hides the reason; the cause
+    // distinguishes refused (server down) from unreachable/timeout (network path broken).
+    private fun Exception.detail(): String {
+        val msg = message ?: javaClass.simpleName
+        val why = cause?.message?.takeIf { it != msg } ?: return msg
+        return "$msg ($why)"
+    }
+
     // FirebaseAuth.getInstance() throws when no FirebaseApp exists (no google-services.json
     // in assets) — every entry point must check FirebaseBootstrap.available first.
     fun isSignedIn(): Boolean =
@@ -65,7 +73,7 @@ object CloudClient {
         val user = FirebaseAuth.getInstance().currentUser ?: return null
         Tasks.await(user.getIdToken(false), 20, TimeUnit.SECONDS).token
     } catch (e: Exception) {
-        AppLog.w("[cloud] token fetch failed: ${e.message}")
+        AppLog.w("[cloud] token fetch failed: ${e.detail()}")
         null
     }
 
@@ -85,7 +93,7 @@ object CloudClient {
                 JSONObject(resp.body!!.string()).optString("email").ifEmpty { null }
             }
         } catch (e: Exception) {
-            AppLog.w("[cloud] /me failed: ${e.message}"); null
+            AppLog.w("[cloud] /me failed: ${e.detail()}"); null
         }
     }
 
@@ -112,7 +120,7 @@ object CloudClient {
                 resp.isSuccessful
             }
         } catch (e: Exception) {
-            AppLog.w("[cloud] push failed: ${e.message}"); false
+            AppLog.w("[cloud] push failed: ${e.detail()}"); false
         }
     }
 
@@ -141,7 +149,7 @@ object CloudClient {
                 }
             }
         } catch (e: Exception) {
-            AppLog.w("[cloud] pull failed: ${e.message}"); null
+            AppLog.w("[cloud] pull failed: ${e.detail()}"); null
         }
     }
 
@@ -160,7 +168,7 @@ object CloudClient {
                 text.ifEmpty { null }
             }
         } catch (e: Exception) {
-            AppLog.w("[cloud] transcribe failed: ${e.message}"); null
+            AppLog.w("[cloud] transcribe failed: ${e.detail()}"); null
         }
     }
 
@@ -180,7 +188,26 @@ object CloudClient {
                 raw.ifEmpty { null }
             }
         } catch (e: Exception) {
-            AppLog.w("[cloud] summarize(chain) failed: ${e.message}"); null
+            AppLog.w("[cloud] summarize(chain) failed: ${e.detail()}"); null
+        }
+    }
+
+    /** POST /v1/ask — Q&A over retrieved notes via the server; null → caller falls back to local. */
+    fun ask(ctx: Context, question: String, notesContext: String, language: String): String? {
+        val payload = JSONObject()
+            .put("question", question)
+            .put("context", notesContext)
+            .put("language", language)
+            .toString().toRequestBody(json)
+        val req = request(ctx, "/v1/ask")?.post(payload)?.build() ?: return null
+        return try {
+            http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) { AppLog.w("[cloud] ask ${resp.code}"); return null }
+                val raw = JSONObject(resp.body!!.string()).optString("raw").trim()
+                raw.ifEmpty { null }
+            }
+        } catch (e: Exception) {
+            AppLog.w("[cloud] ask failed: ${e.detail()}"); null
         }
     }
 
@@ -195,7 +222,7 @@ object CloudClient {
                 raw.ifEmpty { null }
             }
         } catch (e: Exception) {
-            AppLog.w("[cloud] summarize failed: ${e.message}"); null
+            AppLog.w("[cloud] summarize failed: ${e.detail()}"); null
         }
     }
 }

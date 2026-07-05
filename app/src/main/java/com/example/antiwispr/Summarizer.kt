@@ -185,6 +185,79 @@ object Summarizer {
         }
     }
 
+    /**
+     * Ask variant, BLOCKING (call from a worker thread): answers a question from retrieved
+     * notes. Cloud (gpt-4o-mini via /v1/ask) first, on-device Qwen fallback. Builds the
+     * numbered-notes context itself so the budget matches the engine: 24k chars for cloud,
+     * 4k for Qwen (its 4096-token cap covers instructions + question + answer too, and
+     * Devanagari runs ~2 chars/token). Returns raw "ANSWER:/SOURCES:" text; bracket-prefixed
+     * = error, same convention as everything else.
+     */
+    fun askBlocking(context: Context, question: String, hits: List<SearchHit>): String {
+        val ctx = context.applicationContext
+        if (hits.isEmpty()) return "[no matching notes found — try different words]"
+        val language = com.example.antiwispr.cloud.CloudPrefs.askLanguage(ctx)
+        val cloudReady = com.example.antiwispr.cloud.CloudClient.ready(ctx) &&
+            com.example.antiwispr.cloud.CloudPrefs.cloudSummaries(ctx)
+        if (cloudReady) {
+            val cloud = com.example.antiwispr.cloud.CloudClient.ask(
+                ctx, question, buildAskContext(hits, maxChars = 24_000), language
+            )
+            if (cloud != null) {
+                AppLog.i("[ask] cloud answer (gpt-4o-mini).")
+                return cloud
+            }
+        }
+        if (!LlmModel.isReady(ctx)) return "[ask unavailable — no model and no cloud connection]"
+        val eng = ensureEngine(ctx) ?: return "[summarizer init failed]"
+        val t0 = System.currentTimeMillis()
+        val session = LlmInferenceSession.createFromOptions(
+            eng,
+            LlmInferenceSession.LlmInferenceSessionOptions.builder()
+                .setTopK(40)
+                .setTemperature(0.3f)
+                .build()
+        )
+        return try {
+            session.addQueryChunk(
+                buildAskPrompt(question, buildAskContext(hits, maxChars = 4_000, perNoteCap = 1000), language)
+            )
+            val out = session.generateResponse().trim()
+            AppLog.i("[ask] local answer, ${out.length} chars in ${System.currentTimeMillis() - t0} ms.")
+            out.ifEmpty { "[answer empty — try again]" }
+        } finally {
+            try { session.close() } catch (_: Exception) {}
+        }
+    }
+
+    private fun buildAskPrompt(question: String, notesContext: String, language: String): String {
+        val today = java.text.SimpleDateFormat("d MMM yyyy", java.util.Locale.US).format(java.util.Date())
+        val langClause =
+            if (language == com.example.antiwispr.cloud.AskLanguage.Match.wire)
+                "Reply in the SAME language and style as the question (match Hinglish with Hinglish)."
+            else
+                "Reply in clear, simple English, whatever language the notes or question use."
+        return """
+            You answer questions about a user's WhatsApp voice notes. You get numbered notes
+            ([Note 1], [Note 2], …), each with its date and sender, then a question.
+            Answer ONLY from the notes — never invent or guess details. $langClause Keep amounts,
+            dates, times, phone numbers, addresses and names EXACTLY as written in the notes.
+            Use EXACTLY this format:
+            ANSWER: <1-4 short sentences>
+            SOURCES: <the note numbers you used, e.g. [Note 2], [Note 5]>
+            If the notes do not contain the answer, say so briefly in ANSWER and write exactly:
+            SOURCES: none
+
+            Notes:
+            ${'"'}${'"'}${'"'}
+            $notesContext
+            ${'"'}${'"'}${'"'}
+
+            Today: $today
+            Question: $question
+        """.trimIndent()
+    }
+
     private fun buildChainPrompt(combined: String, count: Int, sender: String?): String {
         val who = if (sender.isNullOrBlank()) "" else " by $sender"
         return """
@@ -194,7 +267,8 @@ object Summarizer {
             ask or point FIRST. Use EXACTLY this format:
             SUMMARY: <2-4 short sentences covering the whole chain>
             ACTIONS:
-            - <one action item per line, keeping quantities, names, amounts and dates as spoken>
+            - <one action item per line — keep amounts, dates, times, phone numbers, addresses
+              and names EXACTLY as spoken; never paraphrase them away>
             If there is nothing to act on, write exactly:
             ACTIONS:
             - none
@@ -268,7 +342,8 @@ object Summarizer {
         never invent details. Use EXACTLY this format:
         SUMMARY: <2-3 short sentences>
         ACTIONS:
-        - <one action item per line, keeping quantities, names, amounts and dates as spoken>
+        - <one action item per line — keep amounts, dates, times, phone numbers, addresses
+          and names EXACTLY as spoken; never paraphrase them away>
         If there is nothing to act on, write exactly:
         ACTIONS:
         - none

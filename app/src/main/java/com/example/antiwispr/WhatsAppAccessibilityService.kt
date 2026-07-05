@@ -44,6 +44,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        Toggles.load(applicationContext) // the master switch persists; honour it from first event
         overlay = OverlayController(applicationContext)
         orchestrator = Orchestrator(applicationContext, overlay)
         orchestrator.onMatchPause = { pausePlayingVoiceNote() }
@@ -84,6 +85,9 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     }
 
     private fun handleClick(event: AccessibilityEvent) {
+        // Master switch: when off, TACIT ignores WhatsApp entirely — no detection, no
+        // listening, no overlay, not even click logging.
+        if (!Toggles.tacitEnabled) return
         val src = event.source
         if (src == null) {
             AppLog.w("[a11y] TYPE_VIEW_CLICKED but source node is null (not retrievable).")
@@ -141,12 +145,99 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         }
 
         if (Toggles.orchestrationEnabled) {
-            val chatName = currentChatTitle()
+            val title = currentChatTitle()
+            val sender = senderNameFor(src)
+            // Group note: "Rahul · Family" (who spoke + where). DM / own note / no label: title only.
+            val chatName = when {
+                sender != null && title != null && !sender.equals(title, ignoreCase = true) -> "$sender · $title"
+                sender != null -> sender
+                else -> title
+            }
             if (chatName != null) AppLog.i("[a11y] chat = \"$chatName\"")
             orchestrator.onPlayTap(null, timestamp, chatName) // duration unused; index handles identification
         } else {
             AppLog.i("[a11y] orchestration disabled — skipping capture/match/transcribe.")
         }
+    }
+
+    // In-bubble sender label ids (group chats). Version-dependent — extend from a diagnostic
+    // dump if WhatsApp renames it; missing just means "no sender", never a broken pipeline.
+    private val senderLabelIds = listOf("com.whatsapp:id/name_in_group")
+
+    /**
+     * The PERSON who sent the tapped note (groups only — the toolbar title is the GROUP
+     * name there). Primary source: the bubble row's a11y description, which names the
+     * sender on EVERY incoming group bubble — "Hrishita RS, voice message, 17 seconds,
+     * 1:05 pm, played" (confirmed by an on-device node dump). Fallbacks: the visual
+     * name_in_group label (first message of a run only; the name sits on a child
+     * TextView), then the nearest labeled row above. Own (outgoing) notes are
+     * right-aligned — skipped, so a neighbour's name is never attributed to us.
+     * Null for DMs.
+     */
+    private fun senderNameFor(src: AccessibilityNodeInfo): String? = try {
+        val bounds = Rect().also { src.getBoundsInScreen(it) }
+        if (bounds.left > resources.displayMetrics.widthPixels / 2) {
+            null // outgoing bubble (right-aligned control) — our own note
+        } else {
+            val row = findMessageRow(src)
+            val sender = senderFromRowDesc(row) ?: senderLabelIn(row) ?: nearestLabelAbove(row)
+            if (sender == null) AppLog.i("[a11y] no sender found (DM, or WhatsApp changed its row description).")
+            sender
+        }
+    } catch (e: Exception) {
+        AppLog.w("[a11y] sender lookup failed (non-fatal): ${e.message}")
+        null
+    }
+
+    /** "Hrishita RS, voice message, 17 seconds, 1:05 pm, played" → "Hrishita RS".
+     *  DM rows/own notes start with "voice message"/"You" and yield null. */
+    private fun senderFromRowDesc(row: AccessibilityNodeInfo?): String? {
+        val desc = findVoiceRowDesc(row, 0) ?: return null
+        val first = desc.substringBefore(",").trim()
+        val lower = first.lowercase(Locale.US)
+        if (first.isEmpty() || lower == "you" ||
+            lower.contains("voice message") || lower.contains("voice note")
+        ) return null
+        return first
+    }
+
+    private fun findVoiceRowDesc(n: AccessibilityNodeInfo?, depth: Int): String? {
+        if (n == null || depth > 4) return null
+        val d = n.contentDescription?.toString()
+        if (d != null && d.lowercase(Locale.US).contains("voice message")) return d
+        for (i in 0 until n.childCount) findVoiceRowDesc(n.getChild(i), depth + 1)?.let { return it }
+        return null
+    }
+
+    /** name_in_group is a container — the name text lives on a descendant TextView. */
+    private fun senderLabelIn(row: AccessibilityNodeInfo?): String? {
+        row ?: return null
+        for (id in senderLabelIds) {
+            val node = row.findAccessibilityNodeInfosByViewId(id)?.firstOrNull() ?: continue
+            firstText(node, 0)?.let { return it }
+        }
+        return null
+    }
+
+    private fun firstText(n: AccessibilityNodeInfo?, depth: Int): String? {
+        if (n == null || depth > 3) return null
+        n.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        for (i in 0 until n.childCount) firstText(n.getChild(i), depth + 1)?.let { return it }
+        return null
+    }
+
+    /** Last resort for label-collapsed runs: any run break re-labels, so the nearest
+     *  labeled row above an incoming row belongs to the same sender. */
+    private fun nearestLabelAbove(row: AccessibilityNodeInfo): String? {
+        val list = row.parent ?: return null
+        var idx = -1
+        for (i in 0 until list.childCount) if (list.getChild(i) == row) { idx = i; break }
+        var i = idx - 1
+        while (i >= 0 && idx - i <= 6) {
+            senderLabelIn(list.getChild(i))?.let { return it }
+            i--
+        }
+        return null
     }
 
     /** Best-effort chat title from the conversation screen (for sender attribution).

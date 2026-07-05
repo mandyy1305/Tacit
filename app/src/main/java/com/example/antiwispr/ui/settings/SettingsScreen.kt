@@ -40,6 +40,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -50,7 +51,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.antiwispr.BackfillTranscriber
 import com.example.antiwispr.Toggles
+import com.example.antiwispr.cloud.AskLanguage
 import com.example.antiwispr.cloud.CloudAuth
 import com.example.antiwispr.cloud.CloudSttLanguage
 import com.example.antiwispr.cloud.CloudSttMode
@@ -59,6 +62,7 @@ import com.example.antiwispr.ui.SetupStatus
 import com.example.antiwispr.ui.ToggleKey
 import com.example.antiwispr.ui.components.GhostButton
 import com.example.antiwispr.ui.components.InkDivider
+import com.example.antiwispr.ui.components.OptionPickerSheet
 import com.example.antiwispr.ui.components.ProgressCapsule
 import com.example.antiwispr.ui.components.SectionHeader
 import com.example.antiwispr.ui.components.TacitButton
@@ -66,7 +70,9 @@ import com.example.antiwispr.ui.components.relativeTime
 import com.example.antiwispr.ui.overlay.OverlayPreviewDriver
 import com.example.antiwispr.ui.theme.Dimens
 import com.example.antiwispr.ui.theme.MonoStyle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Human-readable controls over the runtime Toggles + model management + Developer tools. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -86,6 +92,8 @@ fun SettingsScreen(
     var showFolderReport by remember { mutableStateOf(false) }
     var showModeSheet by remember { mutableStateOf(false) }
     var showLanguageSheet by remember { mutableStateOf(false) }
+    var showAskLanguageSheet by remember { mutableStateOf(false) }
+    var showBackfillSheet by remember { mutableStateOf(false) }
     var devOpen by remember { mutableStateOf(false) }
     var signInError by remember { mutableStateOf<String?>(null) }
 
@@ -115,6 +123,14 @@ fun SettingsScreen(
 
             Column(Modifier.padding(horizontal = Dimens.screenPad)) {
                 Spacer(Modifier.height(16.dp))
+                ToggleRow(
+                    "TACIT active",
+                    if (setup.tacitEnabled) "Listening for voice notes when they play in WhatsApp."
+                    else "Off — no listening, matching, or overlay. Search and history still work.",
+                    initial = setup.tacitEnabled,
+                ) { vm.setTacitEnabled(it) }
+
+                Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
                 SectionHeader("Account")
                 Spacer(Modifier.height(4.dp))
                 when {
@@ -236,6 +252,17 @@ fun SettingsScreen(
                     ProgressCapsule(setup.modelProgress, setup.modelStatus)
                     Spacer(Modifier.height(10.dp))
                 }
+                LinkRow(
+                    "Make older notes searchable",
+                    if (setup.backfillRunning) "Working through your chosen period…"
+                    else "Transcribe a recent period so it appears in search and history.",
+                ) { if (!setup.backfillRunning) showBackfillSheet = true }
+                if (setup.backfillRunning) {
+                    ProgressCapsule(setup.backfillProgress, setup.backfillStatus)
+                    Spacer(Modifier.height(6.dp))
+                    GhostButton("Cancel", onClick = { vm.cancelBackfill() })
+                    Spacer(Modifier.height(10.dp))
+                }
 
                 Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
                 SectionHeader("Summaries")
@@ -278,6 +305,7 @@ fun SettingsScreen(
                     ProgressCapsule(setup.llmProgress, setup.llmStatus)
                     Spacer(Modifier.height(10.dp))
                 }
+                PickerRow("Ask answers", setup.askLanguage.label) { showAskLanguageSheet = true }
                 Text(
                     "Each note becomes a short brief with action items — generated entirely on this phone.",
                     style = MaterialTheme.typography.bodySmall,
@@ -493,6 +521,47 @@ fun SettingsScreen(
         }
     }
 
+    if (showAskLanguageSheet) {
+        OptionPickerSheet(
+            title = "Ask answers",
+            options = AskLanguage.entries.toList(),
+            selected = setup.askLanguage,
+            label = { it.label },
+            description = { it.description },
+            onSelect = { vm.setAskLanguage(it); showAskLanguageSheet = false },
+            onDismiss = { showAskLanguageSheet = false },
+        )
+    }
+    if (showBackfillSheet) {
+        // Live counts per preset — file listing + store lookups, so computed off-main.
+        val counts by produceState<Map<Int, Int>?>(initialValue = null) {
+            value = withContext(Dispatchers.IO) {
+                val now = System.currentTimeMillis()
+                listOf(7, 30, 90).associateWith { days ->
+                    BackfillTranscriber.countCandidates(context, now - days * 86_400_000L)
+                }
+            }
+        }
+        OptionPickerSheet(
+            title = "Make searchable",
+            options = listOf(7, 30, 90),
+            selected = -1, // nothing pre-selected; picking a row starts the run
+            label = { "Last $it days" },
+            description = { days ->
+                when (val n = counts?.get(days)) {
+                    null -> "counting…"
+                    0 -> "nothing new to transcribe"
+                    else -> "$n note${if (n == 1) "" else "s"} to transcribe" +
+                        if (setup.signedIn && setup.cloudTranscription) " (uses cloud transcription)" else ""
+                }
+            },
+            onSelect = { days ->
+                showBackfillSheet = false
+                if ((counts?.get(days) ?: 1) > 0) vm.startBackfill(days)
+            },
+            onDismiss = { showBackfillSheet = false },
+        )
+    }
     if (showModeSheet) {
         OptionPickerSheet(
             title = "Output style",
@@ -596,69 +665,6 @@ private fun PickerRow(title: String, value: String, onClick: () -> Unit) {
             Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
             tint = MaterialTheme.colorScheme.outline,
         )
-    }
-}
-
-/** Single-select bottom sheet; the language list is long, so rows live in a LazyColumn. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun <T> OptionPickerSheet(
-    title: String,
-    options: List<T>,
-    selected: T,
-    label: (T) -> String,
-    description: (T) -> String? = { null },
-    onSelect: (T) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-    ) {
-        Column(Modifier.padding(horizontal = Dimens.screenPad)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.height(4.dp))
-            LazyColumn(contentPadding = PaddingValues(bottom = 32.dp)) {
-                items(options) { option ->
-                    val isSelected = option == selected
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelect(option) }
-                            .padding(vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                label(option),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = if (isSelected) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurface,
-                            )
-                            description(option)?.let {
-                                Text(
-                                    it,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                        if (isSelected) {
-                            Icon(
-                                Icons.Filled.Check, contentDescription = "Selected",
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                    }
-                    InkDivider()
-                }
-            }
-        }
     }
 }
 

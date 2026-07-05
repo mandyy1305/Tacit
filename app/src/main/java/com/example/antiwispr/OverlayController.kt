@@ -250,6 +250,10 @@ class OverlayController(private val ctx: Context) {
                         onCopy = { text -> copyText(text) },
                         onToggleChain = { on -> onToggleChain?.invoke(on) },
                         onRequestSummary = { onRequestSummary?.invoke() },
+                        // Launching an external app (Maps/dialer/calendar) must drop the card —
+                        // the overlay window floats above whatever it just opened. In-place
+                        // actions (amount copy) return false and keep it up.
+                        onEntityTap = { entity -> if (EntityLauncher.launch(ctx, entity)) dismiss() },
                         onExitFinished = { removeWindow() },
                     )
                 }

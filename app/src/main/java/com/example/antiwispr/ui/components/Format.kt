@@ -2,6 +2,7 @@ package com.example.antiwispr.ui.components
 
 import android.text.format.DateUtils
 import androidx.compose.ui.text.AnnotatedString
+import com.example.antiwispr.SearchEngine
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -39,25 +40,48 @@ fun durationLabel(seconds: Double): String? {
 }
 
 /**
- * Marks every case-insensitive occurrence of [query] in [text] with the accent color.
- * Plain AnnotatedString when the query is blank.
+ * Merged, sorted surface-form match ranges for all [terms] (case-insensitive). Merging
+ * matters: terms can overlap ("ghar" + "har") and nested/overlapping spans would break
+ * the pushStyle walk. NOTE: matching here is surface-form only — a record that matched
+ * cross-script (Devanagari text hit by a Latin query) or via summary/chatName simply
+ * produces no ranges; the card renders un-highlighted with a leading snippet.
  */
+internal fun matchRanges(text: String, terms: List<String>): List<IntRange> {
+    val raw = ArrayList<IntRange>()
+    for (term in terms) {
+        if (term.isEmpty()) continue
+        var i = 0
+        while (i < text.length) {
+            val hit = text.indexOf(term, startIndex = i, ignoreCase = true)
+            if (hit < 0) break
+            raw += hit until hit + term.length
+            i = hit + term.length
+        }
+    }
+    if (raw.size <= 1) return raw
+    raw.sortBy { it.first }
+    val merged = ArrayList<IntRange>(raw.size)
+    var cur = raw[0]
+    for (r in raw.drop(1)) {
+        cur = if (r.first <= cur.last + 1) cur.first..maxOf(cur.last, r.last) else { merged += cur; r }
+    }
+    merged += cur
+    return merged
+}
+
+/** Multi-term highlight: every term's occurrences marked in the accent color. */
 fun highlightMatches(
     text: String,
-    query: String?,
+    terms: List<String>,
     accent: Color,
     accentBackground: Color,
 ): AnnotatedString {
-    val q = query?.trim().orEmpty()
-    if (q.isEmpty()) return AnnotatedString(text)
+    val ranges = matchRanges(text, terms)
+    if (ranges.isEmpty()) return AnnotatedString(text)
     return buildAnnotatedString {
         var i = 0
-        while (i < text.length) {
-            val hit = text.indexOf(q, startIndex = i, ignoreCase = true)
-            if (hit < 0) {
-                append(text.substring(i)); break
-            }
-            append(text.substring(i, hit))
+        for (r in ranges) {
+            append(text.substring(i, r.first))
             pushStyle(
                 SpanStyle(
                     color = accent,
@@ -65,25 +89,37 @@ fun highlightMatches(
                     background = accentBackground,
                 )
             )
-            append(text.substring(hit, hit + q.length))
+            append(text.substring(r.first, r.last + 1))
             pop()
-            i = hit + q.length
+            i = r.last + 1
         }
+        append(text.substring(i))
     }
 }
 
+/** Single-query wrapper — tokenizes like the search engine so per-term hits highlight. */
+fun highlightMatches(
+    text: String,
+    query: String?,
+    accent: Color,
+    accentBackground: Color,
+): AnnotatedString = highlightMatches(text, SearchEngine.tokenize(query.orEmpty()), accent, accentBackground)
+
 /**
- * A readable window around the first match: up to [before] chars of left context and
- * [after] of right, with ellipses. Whole (truncated) text when no query/match.
+ * A readable window around the earliest match of any term: up to [before] chars of left
+ * context and [after] of right, with ellipses. Whole (truncated) text when nothing matches.
  */
-fun snippetAround(text: String, query: String?, before: Int = 40, after: Int = 80): String {
+fun snippetAround(text: String, terms: List<String>, before: Int = 40, after: Int = 80): String {
     val clean = text.replace('\n', ' ').trim()
-    val q = query?.trim().orEmpty()
-    val hit = if (q.isEmpty()) -1 else clean.indexOf(q, ignoreCase = true)
-    if (hit < 0) return clean.take(before + after).let { if (clean.length > it.length) "$it…" else it }
-    val start = (hit - before).coerceAtLeast(0)
-    val end = (hit + q.length + after).coerceAtMost(clean.length)
+    val first = matchRanges(clean, terms).firstOrNull()
+        ?: return clean.take(before + after).let { if (clean.length > it.length) "$it…" else it }
+    val start = (first.first - before).coerceAtLeast(0)
+    val end = (first.last + 1 + after).coerceAtMost(clean.length)
     val prefix = if (start > 0) "…" else ""
     val suffix = if (end < clean.length) "…" else ""
     return "$prefix${clean.substring(start, end)}$suffix"
 }
+
+/** Single-query wrapper — see the terms overload. */
+fun snippetAround(text: String, query: String?, before: Int = 40, after: Int = 80): String =
+    snippetAround(text, SearchEngine.tokenize(query.orEmpty()), before, after)

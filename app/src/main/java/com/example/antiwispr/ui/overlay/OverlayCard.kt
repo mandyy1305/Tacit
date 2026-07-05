@@ -25,8 +25,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -48,6 +50,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -62,12 +65,18 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.antiwispr.ActionEntity
+import com.example.antiwispr.EntityExtractor
 import com.example.antiwispr.ui.theme.Fraunces
 import com.example.antiwispr.ui.theme.Inter
 import com.example.antiwispr.ui.theme.TacitTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The overlay is ALWAYS dark-glass — it floats over WhatsApp's green/dark chrome,
@@ -99,6 +108,7 @@ fun TacitOverlayCard(
     onCopy: (String) -> Unit,
     onToggleChain: (Boolean) -> Unit = {},
     onRequestSummary: () -> Unit = {},
+    onEntityTap: (ActionEntity) -> Unit = {},
     onExitFinished: () -> Unit,
 ) {
     val enterState = remember { MutableTransitionState(false) }
@@ -176,7 +186,7 @@ fun TacitOverlayCard(
                     OverlayPhase.LISTENING -> ListeningBody(state)
                     OverlayPhase.MATCHED -> MatchedBody(state)
                     OverlayPhase.TRANSCRIBING -> TranscribingBody(state)
-                    OverlayPhase.TRANSCRIPT -> TranscriptBody(state, onCopy, onToggleChain, onRequestSummary)
+                    OverlayPhase.TRANSCRIPT -> TranscriptBody(state, onCopy, onToggleChain, onRequestSummary, onEntityTap)
                     OverlayPhase.NO_MATCH -> NoMatchBody()
                     OverlayPhase.NOTICE -> NoticeBody(state)
                 }
@@ -408,6 +418,7 @@ private fun TranscriptBody(
     onCopy: (String) -> Unit,
     onToggleChain: (Boolean) -> Unit,
     onRequestSummary: () -> Unit,
+    onEntityTap: (ActionEntity) -> Unit,
 ) {
     // 0 = Transcript (default — instantly available), 1 = Summary (generated lazily the
     // first time the user opens it).
@@ -435,7 +446,7 @@ private fun TranscriptBody(
             label = "tab",
         ) { t ->
             Box(Modifier.verticalScroll(rememberScrollState())) {
-                if (t == 0) TranscriptPane(state) else SummaryPane(state)
+                if (t == 0) TranscriptPane(state) else SummaryPane(state, onEntityTap)
             }
         }
         Spacer(Modifier.height(10.dp))
@@ -567,7 +578,7 @@ private fun TranscriptPane(state: OverlayUiState) {
 }
 
 @Composable
-private fun SummaryPane(state: OverlayUiState) {
+private fun SummaryPane(state: OverlayUiState, onEntityTap: (ActionEntity) -> Unit) {
     Column {
         if (state.chainSummary && state.chainCount > 1) {
             Text(
@@ -607,7 +618,13 @@ private fun SummaryPane(state: OverlayUiState) {
                         color = OverlayPalette.inkMuted,
                     )
                 } else {
+                    val context = LocalContext.current
                     val parts = remember(raw) { com.example.antiwispr.parseSummary(raw) }
+                    val entities by produceState(emptyList<ActionEntity>(), raw) {
+                        value = withContext(Dispatchers.IO) {
+                            EntityExtractor.extract(context, parts, cap = EntityExtractor.OVERLAY_CAP)
+                        }
+                    }
                     Column {
                         Text(
                             parts.summary,
@@ -638,8 +655,40 @@ private fun SummaryPane(state: OverlayUiState) {
                                 }
                             }
                         }
+                        // The tappable ask. Appears as a snap once extraction lands (allowed);
+                        // never wrap in expand/shrink — the window-resize animation rule.
+                        if (entities.isNotEmpty()) {
+                            Spacer(Modifier.height(12.dp))
+                            EntityChipsFlow(entities, onEntityTap)
+                        }
                     }
                 }
+            }
+        }
+    }
+}
+
+/** Tappable entity pills (the concrete ask) — overlay-styled clone of the chain toggle pill. */
+@Composable
+private fun EntityChipsFlow(entities: List<ActionEntity>, onTap: (ActionEntity) -> Unit) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        entities.forEach { entity ->
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, OverlayPalette.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                    .clickable { onTap(entity) }
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+            ) {
+                Text(
+                    entity.text,
+                    fontFamily = Inter, fontWeight = FontWeight.Medium,
+                    fontSize = 12.sp, color = OverlayPalette.accent,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }

@@ -130,13 +130,8 @@ object Transcripts {
         return removed
     }
 
-    /** Case-insensitive substring search over transcript text, newest first. */
-    @Synchronized fun search(query: String): List<StoredTranscript> {
-        val q = query.trim()
-        if (q.isEmpty()) return emptyList()
-        return map.values.filter { it.text.contains(q, ignoreCase = true) }
-            .sortedByDescending { it.updatedAt }
-    }
+    // NOTE: search lives in SearchEngine (Search.kt) — it needs cross-script normalization
+    // and must scan a snapshot (via all()) so it never holds this store's lock.
 
     // ---- persistence ------------------------------------------------------------
 

@@ -18,12 +18,14 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.core.content.ContextCompat
 import com.example.antiwispr.AppLog
+import com.example.antiwispr.BackfillTranscriber
 import com.example.antiwispr.ChainSummaries
 import com.example.antiwispr.Chains
 import com.example.antiwispr.DetectionHealth
 import com.example.antiwispr.IndexHolder
 import com.example.antiwispr.LlmModel
 import com.example.antiwispr.ProjectionService
+import com.example.antiwispr.SearchEngine
 import com.example.antiwispr.StoredTranscript
 import com.example.antiwispr.Toggles
 import com.example.antiwispr.TranscribeRouter
@@ -32,6 +34,7 @@ import com.example.antiwispr.VoiceNoteWatcher
 import com.example.antiwispr.VoiceNotes
 import com.example.antiwispr.WhatsAppAccessibilityService
 import com.example.antiwispr.WhisperModel
+import com.example.antiwispr.cloud.AskLanguage
 import com.example.antiwispr.cloud.CloudClient
 import com.example.antiwispr.cloud.CloudPrefs
 import com.example.antiwispr.cloud.CloudSttLanguage
@@ -49,6 +52,7 @@ import java.io.File
 
 /** Everything the UI needs to know about permissions, model, index, and session state. */
 data class SetupStatus(
+    val tacitEnabled: Boolean = true,
     val mic: Boolean = false,
     val overlay: Boolean = false,
     val files: Boolean = false,
@@ -77,6 +81,10 @@ data class SetupStatus(
     val cloudSummaries: Boolean = true,
     val sttMode: CloudSttMode = CloudSttMode.DEFAULT,
     val sttLanguage: CloudSttLanguage = CloudSttLanguage.DEFAULT,
+    val askLanguage: AskLanguage = AskLanguage.DEFAULT,
+    val backfillRunning: Boolean = false,
+    val backfillProgress: Float? = null,
+    val backfillStatus: String = "",
     val sessionActive: Boolean = false,
     val transcriptCount: Int = 0,
     val detection: String = "",
@@ -123,16 +131,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     init {
         AppLog.i("=== TACIT — every voice note, read ===")
         val ctx = app.applicationContext
+        Toggles.load(ctx) // master switch persists across restarts
         FirebaseBootstrap.ensureInitialized(ctx)
         // Parity with the old MainActivity.onCreate: warm the index, start the folder watcher.
         IndexHolder.get(ctx).loadOrBuild { AppLog.i(it); refresh() }
         VoiceNoteWatcher.ensureStarted { IndexHolder.get(ctx).loadOrBuild { AppLog.i(it); refresh() } }
         SyncEngine.requestSync(ctx) // no-op unless configured + signed in
+        // Pre-warm the search engine's normalized-text cache so the first search doesn't
+        // pay the one-time transliteration pass (Devanagari-heavy libraries can take ~1-2 s).
+        viewModelScope.launch(Dispatchers.Default) {
+            SearchEngine.prewarm(Transcripts.get(ctx).all())
+        }
         viewModelScope.launch {
             while (isActive) {
                 refresh()
                 val busy = _setup.value.modelDownloading || _setup.value.indexBuilding ||
-                    _setup.value.llmDownloading
+                    _setup.value.llmDownloading || _setup.value.backfillRunning
                 delay(if (busy) 400L else 2500L)
             }
         }
@@ -143,6 +157,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val idx = IndexHolder.get(ctx)
         val snap = idx.snapshot
         _setup.value = SetupStatus(
+            tacitEnabled = Toggles.tacitEnabled,
             mic = hasRecord(ctx),
             overlay = Settings.canDrawOverlays(ctx),
             files = Environment.isExternalStorageManager(),
@@ -174,6 +189,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             cloudSummaries = CloudPrefs.cloudSummaries(ctx),
             sttMode = CloudSttMode.fromWire(CloudPrefs.sttMode(ctx)),
             sttLanguage = CloudSttLanguage.fromWire(CloudPrefs.sttLanguage(ctx)),
+            askLanguage = AskLanguage.fromWire(CloudPrefs.askLanguage(ctx)),
+            backfillRunning = BackfillTranscriber.running,
+            backfillProgress = if (BackfillTranscriber.running && BackfillTranscriber.progressTotal > 0)
+                BackfillTranscriber.progressDone.toFloat() / BackfillTranscriber.progressTotal else null,
+            backfillStatus = BackfillTranscriber.status,
             sessionActive = ProjectionService.sessionActive,
             transcriptCount = Transcripts.get(ctx).count(),
             detection = DetectionHealth.summary(),
@@ -236,6 +256,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setSttLanguage(l: CloudSttLanguage) {
         CloudPrefs.setSttLanguage(getApplication<Application>().applicationContext, l.wire)
         AppLog.i("sttLanguage = ${l.wire}"); refresh()
+    }
+
+    fun setAskLanguage(l: AskLanguage) {
+        CloudPrefs.setAskLanguage(getApplication<Application>().applicationContext, l.wire)
+        AppLog.i("askLanguage = ${l.wire}"); refresh()
     }
 
     fun deleteWhisperModel() {
@@ -320,6 +345,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { delay(500); refresh() }
     }
 
+    /** Master switch — persisted; when off the a11y service ignores WhatsApp entirely. */
+    fun setTacitEnabled(v: Boolean) {
+        Toggles.setTacitEnabled(getApplication<Application>().applicationContext, v)
+        AppLog.i("tacitEnabled = $v")
+        refresh()
+    }
+
     fun setToggle(key: ToggleKey, value: Boolean) {
         when (key) {
             ToggleKey.DiagnosticMode -> { Toggles.diagnosticMode = value; AppLog.i("diagnosticMode = $value") }
@@ -357,6 +389,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             retranscribing = false
             refresh()
         }
+    }
+
+    /** Backfill: transcribe the untranscribed notes of the last [days] days (searchable history). */
+    fun startBackfill(days: Int) {
+        val ctx = getApplication<Application>().applicationContext
+        BackfillTranscriber.start(ctx, System.currentTimeMillis() - days * 86_400_000L)
+        refresh()
+    }
+
+    fun cancelBackfill() {
+        BackfillTranscriber.cancel()
+        refresh()
     }
 
     /** Deletes a cached transcript; the note is re-transcribed on-demand next time it plays. */

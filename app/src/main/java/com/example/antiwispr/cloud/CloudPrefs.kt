@@ -29,6 +29,9 @@ object CloudPrefs {
     fun sttLanguage(ctx: Context): String = prefs(ctx).getString("stt_language", CloudSttLanguage.DEFAULT.wire)!!
     fun setSttLanguage(ctx: Context, v: String) = prefs(ctx).edit().putString("stt_language", v).apply()
 
+    fun askLanguage(ctx: Context): String = prefs(ctx).getString("ask_language", AskLanguage.DEFAULT.wire)!!
+    fun setAskLanguage(ctx: Context, v: String) = prefs(ctx).edit().putString("ask_language", v).apply()
+
     fun lastPullMs(ctx: Context): Long = prefs(ctx).getLong("last_pull_ms", 0L)
     fun setLastPullMs(ctx: Context, v: Long) = prefs(ctx).edit().putLong("last_pull_ms", v).apply()
 

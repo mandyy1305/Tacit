@@ -3,6 +3,10 @@ package com.example.antiwispr.ui.transcript
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.media.MediaPlayer
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -10,8 +14,12 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,12 +29,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,10 +47,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -48,12 +60,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.antiwispr.ActionEntity
+import com.example.antiwispr.AppLog
 import com.example.antiwispr.ChainSummaries
 import com.example.antiwispr.ChainSummarizer
 import com.example.antiwispr.Chains
+import com.example.antiwispr.EntityExtractor
+import com.example.antiwispr.EntityLauncher
 import com.example.antiwispr.LlmModel
 import com.example.antiwispr.StoredTranscript
 import com.example.antiwispr.Summarizer
@@ -61,7 +78,9 @@ import com.example.antiwispr.Transcripts
 import com.example.antiwispr.cloud.SyncEngine
 import com.example.antiwispr.parseSummary
 import java.io.File
+import com.example.antiwispr.ui.components.EntityChipsRow
 import com.example.antiwispr.ui.components.GhostButton
+import com.example.antiwispr.ui.components.durationLabel
 import com.example.antiwispr.ui.components.InkDivider
 import com.example.antiwispr.ui.components.ProgressCapsule
 import com.example.antiwispr.ui.components.SectionHeader
@@ -69,7 +88,9 @@ import com.example.antiwispr.ui.components.TacitButton
 import com.example.antiwispr.ui.components.relativeTime
 import com.example.antiwispr.ui.components.waDateLabel
 import com.example.antiwispr.ui.theme.Dimens
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /**
  * Reading view with two tabs: Summary (LLM summary + action items, generated on-device,
@@ -188,10 +209,17 @@ fun TranscriptDetailScreen(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "Transcribed ${relativeTime(transcript.updatedAt).lowercase()}  ·  ${transcript.name}",
+                    buildString {
+                        append("Transcribed ${relativeTime(transcript.updatedAt).lowercase()}")
+                        if (transcript.chatName.isNotEmpty()) append("  ·  ${transcript.chatName}")
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (audioAvailable) {
+                    Spacer(Modifier.height(12.dp))
+                    AudioPlayerRow(transcript.path, transcript.key)
+                }
                 if (chain != null) {
                     Spacer(Modifier.height(14.dp))
                     ChainSection(
@@ -365,7 +393,11 @@ private fun ChainSection(
                     GhostButton("Try again", onGenerate, enabled = canGenerate)
                 }
                 raw.isNotEmpty() -> {
+                    val context = LocalContext.current
                     val parts = remember(raw) { parseSummary(raw) }
+                    val entities by produceState(emptyList<ActionEntity>(), raw) {
+                        value = withContext(Dispatchers.IO) { EntityExtractor.extract(context, parts) }
+                    }
                     Column {
                         Text(
                             parts.summary,
@@ -383,6 +415,10 @@ private fun ChainSection(
                                         color = MaterialTheme.colorScheme.onSurface)
                                 }
                             }
+                        }
+                        if (entities.isNotEmpty()) {
+                            Spacer(Modifier.height(12.dp))
+                            EntityChipsRow(entities, onTap = { EntityLauncher.launch(context, it) })
                         }
                     }
                 }
@@ -444,7 +480,11 @@ private fun SummaryTab(
             GhostButton("Try again", onRegenerate)
         }
         summaryRaw.isNotEmpty() -> {
+            val context = LocalContext.current
             val parts = remember(summaryRaw) { parseSummary(summaryRaw) }
+            val entities by produceState(emptyList<ActionEntity>(), summaryRaw) {
+                value = withContext(Dispatchers.IO) { EntityExtractor.extract(context, parts) }
+            }
             Column {
                 SelectionContainer {
                     Text(
@@ -475,6 +515,11 @@ private fun SummaryTab(
                         }
                     }
                 }
+                // Tappable ask: outside the SelectionContainers (chips fight selection handles).
+                if (entities.isNotEmpty()) {
+                    Spacer(Modifier.height(16.dp))
+                    EntityChipsRow(entities, onTap = { EntityLauncher.launch(context, it) })
+                }
                 Spacer(Modifier.height(12.dp))
                 GhostButton("Regenerate", onRegenerate)
             }
@@ -490,5 +535,192 @@ private fun SummaryTab(
             TacitButton("Set up summaries", onOpenSettings, Modifier.fillMaxWidth())
         }
         else -> ProgressCapsule(null, "Summarizing on this phone…") // auto-start in flight
+    }
+}
+
+/** In-app playback of the note's audio — WhatsApp's ogg/opus plays natively via MediaPlayer.
+ *  Tap or drag the line to seek. Takes transient audio focus while playing (pauses other
+ *  audio; other apps resume when the note ends) and pauses itself if focus is taken away.
+ *  Renders nothing if the file can't be opened; released when the screen leaves. */
+@Composable
+private fun AudioPlayerRow(path: String, key: String) {
+    val context = LocalContext.current
+    var player by remember(key) { mutableStateOf<MediaPlayer?>(null) }
+    var failed by remember(key) { mutableStateOf(false) }
+    var playing by remember(key) { mutableStateOf(false) }
+    var positionMs by remember(key) { mutableIntStateOf(0) }
+    var durationMs by remember(key) { mutableIntStateOf(0) }
+    var dragFrac by remember(key) { mutableStateOf<Float?>(null) } // non-null while scrubbing
+
+    val audioManager = remember { context.getSystemService(AudioManager::class.java) }
+    val focusRequest = remember(key) {
+        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setOnAudioFocusChangeListener { change ->
+                if (change == AudioManager.AUDIOFOCUS_LOSS ||
+                    change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ||
+                    change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK
+                ) { // something else started playing — yield
+                    player?.let { runCatching { it.pause() } }
+                    playing = false
+                }
+            }
+            .build()
+    }
+
+    fun ensurePlayer(): MediaPlayer? {
+        player?.let { return it }
+        if (failed) return null
+        return try {
+            MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                setDataSource(path)
+                prepare()
+                setOnCompletionListener { mp ->
+                    playing = false
+                    positionMs = 0
+                    runCatching { mp.seekTo(0) }
+                    audioManager?.abandonAudioFocusRequest(focusRequest)
+                }
+            }.also {
+                player = it
+                durationMs = it.duration
+            }
+        } catch (e: Exception) {
+            AppLog.w("[player] can't open $path: ${e.message}")
+            failed = true
+            null
+        }
+    }
+
+    fun pausePlayback() {
+        player?.let { runCatching { it.pause() } }
+        playing = false
+        audioManager?.abandonAudioFocusRequest(focusRequest)
+    }
+
+    fun startPlayback() {
+        val p = ensurePlayer() ?: return
+        audioManager?.requestAudioFocus(focusRequest) // best effort — a voice note tap always wins
+        runCatching { p.start() }
+        playing = true
+    }
+
+    fun seekToFraction(f: Float) {
+        val p = ensurePlayer() ?: return
+        val ms = (f.coerceIn(0f, 1f) * durationMs).toInt()
+        runCatching { p.seekTo(ms) }
+        positionMs = ms
+    }
+
+    // Prepare eagerly off-main so the duration shows before the first tap.
+    LaunchedEffect(key) { withContext(Dispatchers.IO) { ensurePlayer() } }
+    // Tick the progress line while playing.
+    LaunchedEffect(playing) {
+        while (playing) {
+            positionMs = player?.let { runCatching { it.currentPosition }.getOrNull() } ?: 0
+            delay(200)
+        }
+    }
+    DisposableEffect(key) {
+        onDispose {
+            audioManager?.abandonAudioFocusRequest(focusRequest)
+            player?.let { runCatching { it.release() } }
+            player = null
+        }
+    }
+
+    if (failed) return
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary)
+                .clickable { if (playing) pausePlayback() else startPlayback() },
+            contentAlignment = Alignment.Center,
+        ) {
+            if (playing) {
+                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    repeat(2) { // Pause isn't in the pinned icons-core set — draw the two bars
+                        Box(
+                            Modifier
+                                .size(width = 4.dp, height = 14.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(MaterialTheme.colorScheme.onPrimary)
+                        )
+                    }
+                }
+            } else {
+                Icon(
+                    Icons.Filled.PlayArrow, contentDescription = "Play voice note",
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        val playedFrac = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+        val frac = dragFrac ?: playedFrac
+        // Tall hit area around the thin line — draggable to scrub, tappable to jump.
+        Box(
+            Modifier
+                .weight(1f)
+                .height(28.dp)
+                .pointerInput(durationMs) {
+                    detectTapGestures { offset ->
+                        if (durationMs > 0) seekToFraction(offset.x / size.width)
+                    }
+                }
+                .pointerInput(durationMs) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { offset ->
+                            if (durationMs > 0) dragFrac = (offset.x / size.width).coerceIn(0f, 1f)
+                        },
+                        onHorizontalDrag = { change, _ ->
+                            if (durationMs > 0) dragFrac = (change.position.x / size.width).coerceIn(0f, 1f)
+                        },
+                        onDragEnd = {
+                            dragFrac?.let { seekToFraction(it) }
+                            dragFrac = null
+                        },
+                        onDragCancel = { dragFrac = null },
+                    )
+                },
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(frac)
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+            }
+        }
+        if (durationMs > 0) {
+            Spacer(Modifier.width(12.dp))
+            val shownMs = dragFrac?.let { (it * durationMs).toInt() } ?: positionMs
+            Text(
+                "${durationLabel(shownMs / 1000.0) ?: "0:00"} / ${durationLabel(durationMs / 1000.0)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

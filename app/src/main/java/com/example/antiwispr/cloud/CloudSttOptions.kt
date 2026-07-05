@@ -14,6 +14,17 @@ enum class CloudSttMode(val wire: String, val label: String, val description: St
     }
 }
 
+/** Language for Ask-mode answers (cloud and on-device). [wire] travels to /v1/ask. */
+enum class AskLanguage(val wire: String, val label: String, val description: String) {
+    English("english", "English", "Answers always in clear English, whatever language the notes are in."),
+    Match("match", "Match my question", "Hinglish question → Hinglish answer, same for any language.");
+
+    companion object {
+        val DEFAULT = English
+        fun fromWire(v: String?): AskLanguage = entries.firstOrNull { it.wire == v } ?: DEFAULT
+    }
+}
+
 /** Sarvam language codes. Auto-detect first, then alphabetical by label. */
 enum class CloudSttLanguage(val wire: String, val label: String) {
     Auto("unknown", "Auto-detect"),
