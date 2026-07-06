@@ -38,6 +38,21 @@ object SyncEngine {
         }
     }
 
+    /**
+     * Blocking sync on the CALLING thread — for the FCM push handler, which runs off the main
+     * thread and needs the just-pushed record present before it decides overlay-vs-notification.
+     * Reuses the same push+pull as the queued path; the store merge is @Synchronized, so running
+     * alongside a queued sync is safe. Returns false if cloud isn't ready.
+     */
+    fun syncNow(ctx: Context): Boolean {
+        if (!CloudClient.ready(ctx)) return false
+        return try {
+            doSync(ctx.applicationContext); true
+        } catch (t: Throwable) {
+            AppLog.w("[cloud] syncNow failed: ${t.message}"); false
+        }
+    }
+
     /** Record a local deletion so it tombstones on the next sync. */
     fun queueDeletion(ctx: Context, key: String) {
         CloudPrefs.addTombstone(ctx, key, System.currentTimeMillis())

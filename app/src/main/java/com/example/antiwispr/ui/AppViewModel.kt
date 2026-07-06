@@ -39,6 +39,7 @@ import com.example.antiwispr.cloud.CloudClient
 import com.example.antiwispr.cloud.CloudPrefs
 import com.example.antiwispr.cloud.CloudSttLanguage
 import com.example.antiwispr.cloud.CloudSttMode
+import com.example.antiwispr.cloud.FcmRegistrar
 import com.example.antiwispr.cloud.FirebaseBootstrap
 import com.example.antiwispr.cloud.SyncEngine
 import kotlinx.coroutines.Dispatchers
@@ -128,6 +129,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Detail-screen selection. Store keys contain '/' and '|' — never a nav argument. */
     var selectedTranscript by mutableStateOf<StoredTranscript?>(null)
 
+    /** Set by MainActivity when launched/resumed from a "transcript ready" notification;
+     *  AppRoot observes it, resolves the record, and navigates to that note's detail screen. */
+    var pendingOpenKey by mutableStateOf<String?>(null)
+
     init {
         AppLog.i("=== TACIT — every voice note, read ===")
         val ctx = app.applicationContext
@@ -137,6 +142,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         IndexHolder.get(ctx).loadOrBuild { AppLog.i(it); refresh() }
         VoiceNoteWatcher.ensureStarted { IndexHolder.get(ctx).loadOrBuild { AppLog.i(it); refresh() } }
         SyncEngine.requestSync(ctx) // no-op unless configured + signed in
+        FcmRegistrar.register(ctx)  // keep the server's push target fresh (no-op unless signed in)
         // Pre-warm the search engine's normalized-text cache so the first search doesn't
         // pay the one-time transliteration pass (Devanagari-heavy libraries can take ~1-2 s).
         viewModelScope.launch(Dispatchers.Default) {
@@ -217,6 +223,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun onSignedIn() {
         val ctx = getApplication<Application>().applicationContext
         SyncEngine.requestSync(ctx)
+        FcmRegistrar.register(ctx) // register this device for "transcript ready" pushes
         refresh()
     }
 

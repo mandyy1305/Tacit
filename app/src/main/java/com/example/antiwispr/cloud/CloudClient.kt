@@ -3,6 +3,8 @@ package com.example.antiwispr.cloud
 import android.content.Context
 import com.example.antiwispr.AppLog
 import com.example.antiwispr.StoredTranscript
+import com.example.antiwispr.Transcripts
+import com.example.antiwispr.VoiceNotes
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.auth.FirebaseAuth
 import okhttp3.MediaType.Companion.toMediaType
@@ -169,6 +171,53 @@ object CloudClient {
             }
         } catch (e: Exception) {
             AppLog.w("[cloud] transcribe failed: ${e.detail()}"); null
+        }
+    }
+
+    /**
+     * POST /v1/transcribe for a LONG note (>30s): starts an asynchronous Sarvam batch
+     * job and returns true if the server accepted it (202). The transcript is NOT
+     * returned here — it arrives later via sync + an FCM push. The note identity travels
+     * along so the server can write the finished record back to this account's store.
+     */
+    fun startBatch(ctx: Context, file: File, durationSec: Double, chatName: String?): Boolean {
+        val p = VoiceNotes.parseWhatsAppName(file.name)
+        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("file", file.name, file.asRequestBody("audio/ogg".toMediaType()))
+            .addFormDataPart("mode", CloudSttMode.fromWire(CloudPrefs.sttMode(ctx)).wire)
+            .addFormDataPart("language_code", CloudSttLanguage.fromWire(CloudPrefs.sttLanguage(ctx)).wire)
+            .addFormDataPart("duration_seconds", durationSec.toString())
+            .addFormDataPart("key", Transcripts.keyFor(file))
+            .addFormDataPart("path", file.absolutePath)
+            .addFormDataPart("name", file.name)
+            .addFormDataPart("wa_date", (p?.dateYmd ?: -1).toString())
+            .addFormDataPart("seq", (p?.seq ?: -1).toString())
+            .apply { if (!chatName.isNullOrBlank()) addFormDataPart("chat_name", chatName) }
+            .build()
+        val req = request(ctx, "/v1/transcribe")?.post(body)?.build() ?: return false
+        return try {
+            http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) { AppLog.w("[cloud] startBatch ${resp.code}"); return false }
+                AppLog.i("[cloud] batch job started for ${file.name} (${durationSec.toInt()}s).")
+                true
+            }
+        } catch (e: Exception) {
+            AppLog.w("[cloud] startBatch failed: ${e.detail()}"); false
+        }
+    }
+
+    /** POST /v1/device-token — register this device's FCM token so the server can push
+     *  "transcript ready" when an async batch job completes. */
+    fun registerDeviceToken(ctx: Context, token: String): Boolean {
+        val payload = JSONObject().put("token", token).toString().toRequestBody(json)
+        val req = request(ctx, "/v1/device-token")?.post(payload)?.build() ?: return false
+        return try {
+            http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) AppLog.w("[cloud] device-token ${resp.code}")
+                resp.isSuccessful
+            }
+        } catch (e: Exception) {
+            AppLog.w("[cloud] device-token failed: ${e.detail()}"); false
         }
     }
 

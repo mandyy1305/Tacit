@@ -19,6 +19,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -31,6 +32,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.antiwispr.AppLog
 import com.example.antiwispr.ProjectionService
+import com.example.antiwispr.Transcripts
 import com.example.antiwispr.ui.history.HistoryScreen
 import com.example.antiwispr.ui.home.HomeScreen
 import com.example.antiwispr.ui.onboarding.OnboardingScreen
@@ -140,6 +142,18 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
     LifecycleResumeEffect(Unit) {
         vm.onResumed()
         onPauseOrDispose { }
+    }
+
+    // Deep link from a "transcript ready" notification (MainActivity set the key): resolve the
+    // record and open its detail screen, then clear the request so it fires once.
+    val pendingKey = vm.pendingOpenKey
+    LaunchedEffect(pendingKey) {
+        val k = pendingKey ?: return@LaunchedEffect
+        Transcripts.get(context).byKey(k)?.let {
+            vm.selectedTranscript = it
+            nav.navigate("transcript")
+        }
+        vm.pendingOpenKey = null
     }
 
     val start = remember { if (vm.setup.value.setupComplete) "home" else "onboarding" }

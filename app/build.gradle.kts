@@ -58,6 +58,8 @@ dependencies {
     // Credential Manager drives Google sign-in; OkHttp talks to the tacit-cloud Go server.
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.auth)
+    // Cloud Messaging: server pushes "transcript ready" when a long-note batch job finishes.
+    implementation(libs.firebase.messaging)
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services)
     implementation(libs.googleid)

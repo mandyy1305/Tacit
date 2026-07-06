@@ -28,6 +28,13 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     companion object {
         // Stable id of the voice-note play/pause button (from the on-device node dump).
         const val CONTROL_BTN_ID = "com.whatsapp:id/control_btn"
+
+        /** The live orchestrator, exposed so the FCM push handler (a separate component in the
+         *  same process) can deliver a finished cloud transcript to the on-screen overlay.
+         *  Set on connect, cleared on unbind/destroy. */
+        @Volatile
+        var active: Orchestrator? = null
+            private set
     }
 
     private enum class Control { NONE, STARTED, STOPPED }
@@ -48,6 +55,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         overlay = OverlayController(applicationContext)
         orchestrator = Orchestrator(applicationContext, overlay)
         orchestrator.onMatchPause = { pausePlayingVoiceNote() }
+        active = orchestrator // reachable by the FCM push handler while the service is alive
         VoiceNoteWatcher.ensureStarted { IndexHolder.get(applicationContext).loadOrBuild { AppLog.i(it) } }
         AppLog.i("[a11y] SERVICE CONNECTED — bound to com.whatsapp.")
         AppLog.i("[a11y] play control = id '$CONTROL_BTN_ID' (or desc contains 'voice message').")
@@ -58,6 +66,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
         AppLog.w("[a11y] SERVICE UNBOUND (disabled in settings or stopped).")
+        active = null
         // Tear the overlay window down — a disabled service must not leak the window
         // (or, with Compose, its Recomposer/lifecycle).
         if (::overlay.isInitialized) overlay.dismiss()
@@ -65,6 +74,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        active = null
         if (::overlay.isInitialized) overlay.dismiss()
         super.onDestroy()
     }

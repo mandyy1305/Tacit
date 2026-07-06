@@ -28,6 +28,7 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         const val MIN_LISTEN = 1.5   // don't judge before this much audio
         const val MAX_LISTEN = 12.0  // hard give-up
         const val CONFIRM_TICKS = 2  // consecutive confident ticks (same winner) before stopping
+        const val CLOUD_BATCH_MIN_SEC = 30.0 // longer than this → Sarvam batch (async) not the 30s sync endpoint
     }
 
     private val appContext = context.applicationContext
@@ -57,14 +58,24 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
     /** Armed when the transcript is summarizable but nothing is cached — the Summary tab's
      *  first open turns this into a Summarizer.request. Reset per play-tap; generation-stamped. */
     @Volatile private var pendingSummary: PendingSummary? = null
+    /** A long note handed to the cloud batch API; its transcript arrives asynchronously via
+     *  FCM (onCloudTranscriptReady) while the card sits on its spinner. Generation-stamped so a
+     *  superseded session (or a dismissed card) doesn't get repainted by a late push. */
+    @Volatile private var pendingCloud: PendingCloud? = null
 
     private data class PendingSummary(val file: File, val transcript: String, val gen: Int)
+    private data class PendingCloud(val key: String, val file: File, val gen: Int)
     /** Set by the accessibility service; invoked on a confirmed match to pause WhatsApp playback. */
     @Volatile var onMatchPause: (() -> Unit)? = null
 
     init {
-        // Dismissing the overlay (tap-away / ✕) also cancels an in-progress listen.
-        overlay.onDismiss = { cancel("overlay dismissed") }
+        // Dismissing the overlay (tap-away / ✕) cancels an in-progress listen AND invalidates
+        // the session: bump [generation] so a late cloud result can't repaint the gone card —
+        // it becomes a notification instead. Clearing pendingCloud alone isn't enough, because
+        // the batch submit runs on a worker and can set pendingCloud *after* this dismiss (the
+        // upload was still in flight); the generation bump is the guard onCloudTranscriptReady
+        // actually checks.
+        overlay.onDismiss = { cancel("overlay dismissed"); generation++; pendingCloud = null }
         overlay.onToggleChain = { on -> onChainModeToggled(on) }
         overlay.onRequestSummary = { requestNoteSummary() }
     }
@@ -83,6 +94,7 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         sessionChatName = chatName
         pendingChain = null
         pendingSummary = null
+        pendingCloud = null
         sessionFile = null
         chainModeEnabled = false
         // Kick an incremental refresh so a JUST-ARRIVED note gets fingerprinted (+auto-transcribed)
@@ -243,37 +255,67 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
     /** Runs on [transcribeExec]. [gen] guards a superseded session from repainting the new card. */
     private fun resolveTranscriptAndSummary(cand: CandidateFile, gen: Int) {
         val live = { gen == generation }
-        val transcript: String
         val cached = Transcripts.get(appContext).find(cand.file)
         if (cached != null) {
             AppLog.i("[transcripts] cache hit for ${cand.name} — instant.")
-            transcript = cached
             // Stamp the chat name onto an already-cached record if we just learned it.
             sessionChatName?.let { Transcripts.get(appContext).put(cand.file, cached, it) }
-        } else {
-            if (live()) overlay.setTranscript("transcribing…") // real ASR takes a few seconds (+ one-time model load)
-            // Cloud→local routing, caching and sync all live in TranscribeRouter (shared
-            // with chain summarization).
-            transcript = TranscribeRouter.transcribe(appContext, cand.file, sessionChatName)
+            if (!live()) return
+            applyTranscript(cand.file, cand.name, cached, gen)
+            return
         }
+
+        if (live()) overlay.setTranscript("transcribing…") // real ASR takes a few seconds (+ one-time model load)
+
+        // Long notes exceed Sarvam's 30s synchronous cap, so hand them to the async batch
+        // API: the card stays on its spinner and the transcript arrives via FCM
+        // (onCloudTranscriptReady) — or, if the card is gone by then, a notification.
+        // Falls back to local (Whisper via the router) if the job can't be started.
+        if (cand.durationSec > CLOUD_BATCH_MIN_SEC &&
+            CloudClient.ready(appContext) && CloudPrefs.cloudTranscription(appContext)) {
+            if (!live()) return
+            if (CloudClient.startBatch(appContext, cand.file, cand.durationSec, sessionChatName)) {
+                // The card may have been dismissed while the upload was in flight. If so, don't
+                // arm the overlay path — let the push land as a notification instead. (The gen
+                // check in onCloudTranscriptReady also guards the narrow race after this line.)
+                if (!live()) return
+                sessionFile = cand.file
+                pendingCloud = PendingCloud(Transcripts.keyFor(cand.file), cand.file, gen)
+                AppLog.i("[orchestrator] long note ${cand.name} (${cand.durationSec.toInt()}s) -> cloud batch; awaiting push.")
+                return // card left on its spinner; onCloudTranscriptReady finishes it
+            }
+            AppLog.w("[orchestrator] batch submit failed for ${cand.name} — falling back to local.")
+        }
+
+        // Short-note path: cloud→local routing, caching and sync all live in TranscribeRouter.
+        val transcript = TranscribeRouter.transcribe(appContext, cand.file, sessionChatName)
         AppLog.i("[orchestrator] transcript => $transcript")
         if (!live()) {
             AppLog.i("[orchestrator] session superseded by a newer play-tap — transcript cached, card untouched.")
             return
         }
+        applyTranscript(cand.file, cand.name, transcript, gen)
+    }
 
-        sessionFile = cand.file
+    /**
+     * Paint a resolved transcript onto the card and arm summary + chain detection. Shared by
+     * the synchronous path and the async cloud path (onCloudTranscriptReady). The transcript
+     * is assumed already cached in the store (TranscribeRouter for local/sync, cloud sync for
+     * batch) — this only drives the overlay.
+     */
+    private fun applyTranscript(file: File, name: String, transcript: String, gen: Int) {
+        sessionFile = file
 
         // Summary disposition — LAZY: never auto-generate. Cached → instant READY; summarizable →
         // arm pendingSummary and leave summaryState at NONE (idle); else → settings hint.
         // Decided BEFORE setTranscript() flips the card to TRANSCRIPT and makes the Summary tab
         // tappable, so a fast tab-tap can never observe an unarmed pendingSummary.
         if (!transcript.startsWith("[")) {
-            val cachedSummary = Transcripts.get(appContext).entry(cand.file)?.summary.orEmpty()
+            val cachedSummary = Transcripts.get(appContext).entry(file)?.summary.orEmpty()
             when {
                 cachedSummary.isNotEmpty() -> overlay.setSummaryReady(cachedSummary)
                 Summarizer.canSummarize(appContext) ->
-                    pendingSummary = PendingSummary(cand.file, transcript, gen)
+                    pendingSummary = PendingSummary(file, transcript, gen)
                 else -> overlay.setSummaryUnavailable()
             }
         }
@@ -281,14 +323,31 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
 
         // Chain detection: does this note belong to a burst? Toggle-first — the card offers
         // "Transcribe all N"; both tabs go burst-wide only when the user flips it on.
-        val chain = try { Chains.chainFor(appContext, cand.file) } catch (t: Throwable) {
+        val chain = try { Chains.chainFor(appContext, file) } catch (t: Throwable) {
             AppLog.w("[chains] detection failed (non-fatal): ${t.message}"); null
         }
         pendingChain = chain
         if (chain != null && gen == generation) {
-            AppLog.i("[chains] ${cand.name} is part ${chain.partIndexOf(cand.file)} of ${chain.size} (${chain.id}).")
-            overlay.setChainInfo(chain.partIndexOf(cand.file), chain.size)
+            AppLog.i("[chains] $name is part ${chain.partIndexOf(file)} of ${chain.size} (${chain.id}).")
+            overlay.setChainInfo(chain.partIndexOf(file), chain.size)
         }
+    }
+
+    /**
+     * Delivered by the FCM push handler when a long note's cloud batch transcript has arrived
+     * and been merged into the store. Returns true if the LIVE overlay is still showing this
+     * note and was updated in place (feels instant); false means the card is gone or superseded
+     * and the caller should post a notification instead.
+     */
+    fun onCloudTranscriptReady(key: String, text: String): Boolean {
+        val pc = pendingCloud ?: return false
+        if (pc.key != key || pc.gen != generation) return false
+        pendingCloud = null
+        transcribeExec.execute {
+            if (pc.gen != generation) return@execute // superseded in the gap — result is already in History
+            applyTranscript(pc.file, pc.file.name, text, pc.gen)
+        }
+        return true
     }
 
     /** Overlay's Summary tab, first open in the current mode. Lazy: single-note summary, or the

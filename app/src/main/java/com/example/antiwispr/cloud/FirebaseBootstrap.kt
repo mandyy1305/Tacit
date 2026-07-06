@@ -44,14 +44,15 @@ object FirebaseBootstrap {
             webClientId = findWebClientId(client)
 
             if (FirebaseApp.getApps(ctx).isEmpty()) {
-                FirebaseApp.initializeApp(
-                    ctx,
-                    FirebaseOptions.Builder()
-                        .setApplicationId(appId)
-                        .setApiKey(apiKey)
-                        .setProjectId(projectInfo.getString("project_id"))
-                        .build()
-                )
+                val options = FirebaseOptions.Builder()
+                    .setApplicationId(appId)
+                    .setApiKey(apiKey)
+                    .setProjectId(projectInfo.getString("project_id"))
+                // Sender id (project number) is required for FCM to mint a token; without the
+                // google-services plugin we must set it on the options ourselves.
+                projectInfo.optString("project_number").takeIf { it.isNotEmpty() }
+                    ?.let { options.setGcmSenderId(it) }
+                FirebaseApp.initializeApp(ctx, options.build())
             }
             available = true
             AppLog.i("[cloud] Firebase initialized (project ${projectInfo.getString("project_id")}); webClientId=${if (webClientId != null) "found" else "MISSING — enable the Google provider"}")

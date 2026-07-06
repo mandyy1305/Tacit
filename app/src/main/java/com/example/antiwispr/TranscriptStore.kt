@@ -97,6 +97,10 @@ object Transcripts {
     /** Full stored record for this file (transcript + summary), or null. */
     @Synchronized fun entry(f: File): StoredTranscript? = map[keyFor(f)]
 
+    /** Full stored record by its key (path|mtime|size). Used by the FCM push handler, which
+     *  has the key from the push payload but not a File. */
+    @Synchronized fun byKey(key: String): StoredTranscript? = map[key]
+
     /** Attach/replace the LLM summary on an existing record. No-op if the record is gone.
      *  Bumps updatedAt — the sync push cursor is changedSince(updatedAt), so a summary attached
      *  after its transcript was pushed would otherwise never reach the cloud. */
