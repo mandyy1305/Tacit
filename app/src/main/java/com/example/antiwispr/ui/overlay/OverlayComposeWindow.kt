@@ -121,11 +121,12 @@ class OverlayComposeWindow(
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-            // WindowManager-added windows are SOFTWARE-rendered unless this flag is set
-            // (activities get GPU rendering implicitly; service overlays do not). Without
-            // it every animation frame — resizes, fades, the equalizer — draws on the CPU.
-            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+        // FLAG_HARDWARE_ACCELERATED intentionally OMITTED: on this device the GPU overlay layer
+        // intermittently failed to composite after a rapid remove/re-add — the window attached,
+        // was full-size, opaque, and even drew (per [overlay-dbg]), yet stayed off the display on
+        // alternate play-taps. Software rendering composites reliably; the card is small so the
+        // CPU-drawn fades/equalizer are fine.
         PixelFormat.TRANSLUCENT
     ).apply {
         gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
