@@ -66,6 +66,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         Toggles.load(applicationContext) // the master switch persists; honour it from first event
         overlay = OverlayController(applicationContext)
+        overlay.warmUp() // absorb the cold-start first-overlay-window penalty before the first play
         orchestrator = Orchestrator(applicationContext, overlay)
         orchestrator.onMatchPause = { pausePlayingVoiceNote() }
         active = orchestrator // reachable by the FCM push handler while the service is alive
@@ -82,13 +83,13 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         active = null
         // Tear the overlay window down — a disabled service must not leak the window
         // (or, with Compose, its Recomposer/lifecycle).
-        if (::overlay.isInitialized) overlay.dismiss()
+        if (::overlay.isInitialized) overlay.destroy()
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
         active = null
-        if (::overlay.isInitialized) overlay.dismiss()
+        if (::overlay.isInitialized) overlay.destroy()
         super.onDestroy()
     }
 

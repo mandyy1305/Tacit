@@ -80,18 +80,36 @@ class OverlayController(private val ctx: Context) {
 
     // ---- public API (frozen) ------------------------------------------------------
 
+    /**
+     * Establish the persistent overlay window NOW, while things are calm (at service-connect),
+     * hidden and non-touchable. Adding the window later — on a play-tap right after WhatsApp
+     * opened/switched a chat — intermittently yields a layer the compositor never shows (attached,
+     * sized, opaque, drawn, yet off-screen). Adding it once here and only toggling content +
+     * touchability thereafter means no window is ever added during that bad moment. Idempotent.
+     */
+    fun warmUp() = onMain {
+        if (!canDraw()) return@onMain
+        ensureWindow()
+        window?.setTouchable(false)
+        AppLog.i("[overlay] persistent window established (warm-up).")
+    }
+
+    /** Real teardown for a disabled/destroyed service — the persistent window must not leak. */
+    fun destroy() = onMain {
+        cancelRemoveFallback()
+        window?.remove()
+        window = null
+    }
+
     fun showSpinner(message: String) = onMain {
         if (!canDraw()) return@onMain
         session++         // new listen session — stale dismisses from older sessions are void
         dismissed = false // allow the card again
         sticky = false    // listening is dismissable by tapping away
         cancelRemoveFallback()
-        // Fresh window every session. Reusing a window that the system silently killed (or
-        // whose composition is mid-teardown) wedges the overlay invisibly for every later
-        // session; a removeView+addView per play-tap is trivial and makes that impossible.
-        window?.remove()
         state.value = OverlayUiState(visible = true, phase = OverlayPhase.LISTENING, statusLine = message)
-        ensureWindow()
+        ensureWindow()             // reuses the persistent window (created at warm-up) — never re-added
+        window?.setTouchable(true) // card is up: accept its taps + tap-away
         AppLog.i("[overlay] showing result card: \"$message\" (session $session)")
     }
 
@@ -254,22 +272,19 @@ class OverlayController(private val ctx: Context) {
                         // the overlay window floats above whatever it just opened. In-place
                         // actions (amount copy) return false and keep it up.
                         onEntityTap = { entity -> if (EntityLauncher.launch(ctx, entity)) dismiss() },
-                        onExitFinished = { removeWindow() },
+                        // The window is persistent; when the exit animation finishes we don't
+                        // remove it, we just make it pass-through again until the next card.
+                        onExitFinished = { onMain { cancelRemoveFallback(); window?.setTouchable(false) } },
                     )
                 }
             }
         }
     }
 
-    private fun removeWindow() = onMain {
-        cancelRemoveFallback()
-        window?.remove()
-    }
-
-    /** Hard fallback: remove the window even if the exit transition never reports back. */
+    /** Hard fallback: make the window pass-through even if the exit transition never reports back. */
     private fun scheduleRemoveFallback() {
         cancelRemoveFallback()
-        val r = Runnable { if (dismissed) window?.remove() }
+        val r = Runnable { if (dismissed) window?.setTouchable(false) }
         removeFallback = r
         main.postDelayed(r, 350)
     }
