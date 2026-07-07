@@ -54,6 +54,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -66,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.antiwispr.ActionEntity
 import com.example.antiwispr.AppLog
+import com.example.antiwispr.ChainOverrides
 import com.example.antiwispr.ChainSummaries
 import com.example.antiwispr.ChainSummarizer
 import com.example.antiwispr.Chains
@@ -74,6 +76,7 @@ import com.example.antiwispr.EntityLauncher
 import com.example.antiwispr.LlmModel
 import com.example.antiwispr.StoredTranscript
 import com.example.antiwispr.Summarizer
+import com.example.antiwispr.TranscribeRouter
 import com.example.antiwispr.Transcripts
 import com.example.antiwispr.cloud.SyncEngine
 import com.example.antiwispr.parseSummary
@@ -90,6 +93,7 @@ import com.example.antiwispr.ui.components.waDateLabel
 import com.example.antiwispr.ui.theme.Dimens
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -104,6 +108,8 @@ fun TranscriptDetailScreen(
     onRetranscribe: (StoredTranscript) -> Unit = {},
     retranscribing: Boolean = false,
     onOpenSettings: () -> Unit = {},
+    onOpenNote: (StoredTranscript) -> Unit = {},
+    onChainChanged: () -> Unit = {},
 ) {
     // Process-death restore (or a just-deleted transcript) lands here with no
     // selection — bounce back gracefully.
@@ -128,14 +134,49 @@ fun TranscriptDetailScreen(
 
     val canSummarize = remember { Summarizer.canSummarize(context) } // local model OR cloud
 
-    // Chain membership (files on disk; null on a restored library without the audio).
-    val chain = remember(transcript.key) {
-        runCatching { Chains.chainFor(context, File(transcript.path)) }.getOrNull()
+    // Bumped when the user detaches / re-attaches or transcribes chain members, so state recomputes.
+    var chainEdits by remember(transcript.key) { mutableIntStateOf(0) }
+    // Chain membership: the overlay-detected burst (includes notes not transcribed yet, so we can
+    // offer "Transcribe all") when available, else the store-derived cluster. null = lone/detached.
+    val chain = remember(transcript.key, chainEdits) {
+        runCatching { Chains.chainForNote(context, transcript) }.getOrNull()
     }
-    var chainRaw by remember(transcript.key) {
+    // Each member paired with its stored transcript (null = not transcribed yet).
+    val chainMembers = remember(transcript.key, chainEdits) {
+        chain?.files?.map { it to Transcripts.get(context).entry(it) } ?: emptyList()
+    }
+    val detached = remember(transcript.key, chainEdits) {
+        ChainOverrides.get(context).isDetached(ChainOverrides.idOf(transcript.waDate, transcript.seq))
+    }
+    // Whole-chain toggle: OFF = this note only; ON = both tabs cover the whole chain.
+    var wholeChain by rememberSaveable(transcript.key) { mutableStateOf(false) }
+    val chainTranscript = remember(chain?.id, chainEdits) {
+        chainMembers.mapIndexed { i, (_, rec) ->
+            "[Note ${i + 1}]\n" + (rec?.text?.ifBlank { null } ?: "[not transcribed yet — tap “Transcribe all”]")
+        }.joinToString("\n\n")
+    }
+    var chainRaw by remember(transcript.key, chainEdits) {
         mutableStateOf(chain?.let { ChainSummaries.get(context).find(it.id)?.raw }.orEmpty())
     }
     var chainGenerating by remember(transcript.key) { mutableStateOf(false) }
+    var transcribingChain by remember(transcript.key) { mutableStateOf(false) }
+    val chainScope = rememberCoroutineScope()
+    fun transcribeChain() {
+        val c = chain ?: return
+        transcribingChain = true
+        chainScope.launch(Dispatchers.IO) {
+            for (f in c.files) {
+                if (Transcripts.get(context).entry(f) == null && f.exists()) {
+                    runCatching { TranscribeRouter.transcribe(context, f, c.chatName) }
+                }
+            }
+            withContext(Dispatchers.Main) {
+                transcribingChain = false
+                chainEdits++      // refresh member list + whole-chain transcript
+                onChainChanged()  // refresh badges/history
+            }
+        }
+    }
     fun generate() {
         generating = true
         Summarizer.request(context, transcript.key, transcript.text) { raw ->
@@ -222,21 +263,31 @@ fun TranscriptDetailScreen(
                 }
                 if (chain != null) {
                     Spacer(Modifier.height(14.dp))
-                    ChainSection(
-                        part = chain.partIndexOf(File(transcript.path)),
-                        count = chain.size,
+                    ChainCard(
+                        members = chainMembers,
+                        currentKey = transcript.key,
                         chatName = chain.chatName ?: transcript.chatName.ifEmpty { null },
-                        raw = chainRaw,
-                        generating = chainGenerating,
-                        canGenerate = canSummarize,
-                        onGenerate = {
-                            chainGenerating = true
-                            ChainSummarizer.request(context, chain, chain.chatName) { result ->
-                                chainRaw = result
-                                chainGenerating = false
-                            }
+                        wholeChain = wholeChain,
+                        transcribing = transcribingChain,
+                        onToggle = { wholeChain = it },
+                        onOpen = onOpenNote,
+                        onTranscribeAll = { transcribeChain() },
+                        onRemove = {
+                            ChainOverrides.get(context)
+                                .detach(ChainOverrides.idOf(transcript.waDate, transcript.seq))
+                            wholeChain = false
+                            chainEdits++
+                            onChainChanged()
                         },
                     )
+                } else if (detached) {
+                    Spacer(Modifier.height(14.dp))
+                    GhostButton("Add this note back to its chain", onClick = {
+                        ChainOverrides.get(context)
+                            .reattach(ChainOverrides.idOf(transcript.waDate, transcript.seq))
+                        chainEdits++
+                        onChainChanged()
+                    })
                 }
                 Spacer(Modifier.height(14.dp))
                 ReaderTabs(tab, onSelect = { tab = it })
@@ -245,18 +296,32 @@ fun TranscriptDetailScreen(
                 Spacer(Modifier.height(18.dp))
 
                 AnimatedContent(
-                    targetState = tab,
+                    targetState = tab to (wholeChain && chain != null),
                     transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(90)) using null },
                     label = "readerTab",
-                ) { t ->
+                ) { (t, whole) ->
                     if (t == 0) {
                         SelectionContainer {
                             Text(
-                                transcript.text,
+                                if (whole) chainTranscript else transcript.text,
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = MaterialTheme.colorScheme.onBackground,
                             )
                         }
+                    } else if (whole && chain != null) {
+                        ChainGist(
+                            raw = chainRaw,
+                            generating = chainGenerating,
+                            canGenerate = canSummarize,
+                            count = chain.size,
+                            onGenerate = {
+                                chainGenerating = true
+                                ChainSummarizer.request(context, chain, chain.chatName) { result ->
+                                    chainRaw = result
+                                    chainGenerating = false
+                                }
+                            },
+                        )
                     } else {
                         SummaryTab(
                             summaryRaw = summaryRaw,
@@ -270,8 +335,12 @@ fun TranscriptDetailScreen(
                 Spacer(Modifier.height(32.dp))
             }
 
-            val activeText = if (tab == 1 && summaryRaw.isNotEmpty() && !summaryRaw.startsWith("["))
-                summaryRaw else transcript.text
+            val activeText = when {
+                wholeChain && chain != null && tab == 0 -> chainTranscript
+                wholeChain && chain != null && tab == 1 && chainRaw.isNotEmpty() && !chainRaw.startsWith("[") -> chainRaw
+                tab == 1 && summaryRaw.isNotEmpty() && !summaryRaw.startsWith("[") -> summaryRaw
+                else -> transcript.text
+            }
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -356,79 +425,156 @@ fun TranscriptDetailScreen(
     }
 }
 
-/** "Part 2 of 4 · sent together · Mom" + the chain gist (cached, generating, or a button). */
+/** The chain this note belongs to: a header + a "whole chain" toggle, the linked notes (each
+ *  tappable to open it; un-transcribed ones marked), a "Transcribe all" action for notes not yet
+ *  transcribed, and a control to detach this note from the chain. */
 @Composable
-private fun ChainSection(
-    part: Int,
-    count: Int,
+private fun ChainCard(
+    members: List<Pair<File, StoredTranscript?>>,
+    currentKey: String,
     chatName: String?,
-    raw: String,
-    generating: Boolean,
-    canGenerate: Boolean,
-    onGenerate: () -> Unit,
+    wholeChain: Boolean,
+    transcribing: Boolean,
+    onToggle: (Boolean) -> Unit,
+    onOpen: (StoredTranscript) -> Unit,
+    onTranscribeAll: () -> Unit,
+    onRemove: () -> Unit,
 ) {
+    val untranscribed = members.count { it.second == null }
     androidx.compose.material3.Surface(
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f),
     ) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
-            Text(
-                buildString {
-                    append("PART $part OF $count · SENT TOGETHER")
-                    if (!chatName.isNullOrBlank()) append(" · ${chatName.uppercase()}")
-                },
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.tertiary,
-            )
-            Spacer(Modifier.height(10.dp))
-            when {
-                generating -> ProgressCapsule(null, "Summarizing $count notes…")
-                raw.startsWith("[") -> Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    buildString {
+                        append("CHAIN · ${members.size} NOTES")
+                        if (!chatName.isNullOrBlank()) append(" · ${chatName.uppercase()}")
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "Whole chain",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(8.dp))
+                androidx.compose.material3.Switch(checked = wholeChain, onCheckedChange = onToggle)
+            }
+            Spacer(Modifier.height(8.dp))
+            members.forEachIndexed { i, (_, rec) ->
+                val isCurrent = rec?.key == currentKey
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(enabled = rec != null && !isCurrent) { rec?.let(onOpen) }
+                        .padding(vertical = 6.dp, horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text(
-                        raw.trim('[', ']'),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        "${i + 1}.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.tertiary,
                     )
-                    Spacer(Modifier.height(6.dp))
-                    GhostButton("Try again", onGenerate, enabled = canGenerate)
-                }
-                raw.isNotEmpty() -> {
-                    val context = LocalContext.current
-                    val parts = remember(raw) { parseSummary(raw) }
-                    val entities by produceState(emptyList<ActionEntity>(), raw) {
-                        value = withContext(Dispatchers.IO) { EntityExtractor.extract(context, parts) }
-                    }
-                    Column {
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        rec?.text?.take(90)?.ifBlank { "(no transcript)" } ?: "Not transcribed yet",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = when {
+                            rec == null -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            isCurrent -> MaterialTheme.colorScheme.onSurface
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 2,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (isCurrent) {
+                        Spacer(Modifier.width(8.dp))
                         Text(
-                            parts.summary,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            "THIS",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary,
                         )
-                        if (parts.actions.isNotEmpty()) {
-                            Spacer(Modifier.height(10.dp))
-                            parts.actions.forEach { action ->
-                                Row(Modifier.padding(vertical = 2.dp)) {
-                                    Text("–", style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.tertiary)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(action, style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurface)
-                                }
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            if (transcribing) {
+                ProgressCapsule(null, "Transcribing $untranscribed note${if (untranscribed == 1) "" else "s"}…")
+                Spacer(Modifier.height(8.dp))
+            } else if (untranscribed > 0) {
+                GhostButton("Transcribe all ${members.size} notes", onTranscribeAll)
+                Spacer(Modifier.height(8.dp))
+            }
+            GhostButton("Remove this note from the chain", onRemove)
+        }
+    }
+}
+
+/** The whole-chain gist (cached, generating, error, or a generate button) — shown on the Summary
+ *  tab when the chain toggle is on. Mirrors [SummaryTab]'s styling. */
+@Composable
+private fun ChainGist(
+    raw: String,
+    generating: Boolean,
+    canGenerate: Boolean,
+    count: Int,
+    onGenerate: () -> Unit,
+) {
+    when {
+        generating -> ProgressCapsule(null, "Summarizing $count notes…")
+        raw.startsWith("[") -> Column {
+            Text(
+                raw.trim('[', ']'),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            GhostButton("Try again", onGenerate, enabled = canGenerate)
+        }
+        raw.isNotEmpty() -> {
+            val context = LocalContext.current
+            val parts = remember(raw) { parseSummary(raw) }
+            val entities by produceState(emptyList<ActionEntity>(), raw) {
+                value = withContext(Dispatchers.IO) { EntityExtractor.extract(context, parts) }
+            }
+            Column {
+                SelectionContainer {
+                    Text(
+                        parts.summary,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                }
+                if (parts.actions.isNotEmpty()) {
+                    Spacer(Modifier.height(20.dp))
+                    SectionHeader("Actions")
+                    Spacer(Modifier.height(8.dp))
+                    parts.actions.forEach { action ->
+                        Row(Modifier.padding(vertical = 3.dp)) {
+                            Text("–", style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(10.dp))
+                            SelectionContainer {
+                                Text(action, style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 24.sp),
+                                    color = MaterialTheme.colorScheme.onBackground)
                             }
                         }
-                        if (entities.isNotEmpty()) {
-                            Spacer(Modifier.height(12.dp))
-                            EntityChipsRow(entities, onTap = { EntityLauncher.launch(context, it) })
-                        }
                     }
                 }
-                else -> GhostButton(
-                    "Summarize the chain ($count notes)",
-                    onGenerate,
-                    enabled = canGenerate,
-                )
+                if (entities.isNotEmpty()) {
+                    Spacer(Modifier.height(16.dp))
+                    EntityChipsRow(entities, onTap = { EntityLauncher.launch(context, it) })
+                }
+                Spacer(Modifier.height(12.dp))
+                GhostButton("Regenerate", onGenerate, enabled = canGenerate)
             }
         }
+        else -> GhostButton("Summarize the chain ($count notes)", onGenerate, enabled = canGenerate)
     }
 }
 

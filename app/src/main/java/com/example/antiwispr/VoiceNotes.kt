@@ -1,5 +1,6 @@
 package com.example.antiwispr
 
+import android.media.MediaMetadataRetriever
 import android.os.Environment
 import java.io.File
 import java.util.Calendar
@@ -41,6 +42,20 @@ object VoiceNotes {
         for (c in children) {
             if (c.isDirectory) collectOpus(c, out)
             else if (c.name.endsWith(".opus", true) || c.name.endsWith(".ogg", true)) out.add(c)
+        }
+    }
+
+    /** Audio duration in seconds via MediaMetadataRetriever; -1.0 on failure. Decodes container
+     *  metadata only (no PCM), so it's cheap enough to probe a handful of chain-candidate files. */
+    fun readDurationSec(f: File): Double {
+        val mmr = MediaMetadataRetriever()
+        return try {
+            mmr.setDataSource(f.absolutePath)
+            (mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) / 1000.0
+        } catch (e: Exception) {
+            -1.0
+        } finally {
+            try { mmr.release() } catch (_: Exception) {}
         }
     }
 

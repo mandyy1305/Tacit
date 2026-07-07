@@ -220,6 +220,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 onRetranscribe = { vm.retranscribe(it) },
                 retranscribing = vm.retranscribing,
                 onOpenSettings = { nav.navigate("settings") },
+                onOpenNote = { vm.selectedTranscript = it }, // swap the reader to a linked chain note in place
+                onChainChanged = { vm.refresh() },           // detach/re-attach → refresh badges
             )
         }
         composable("settings") {

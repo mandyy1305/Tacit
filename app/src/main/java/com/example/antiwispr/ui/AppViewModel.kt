@@ -19,6 +19,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.core.content.ContextCompat
 import com.example.antiwispr.AppLog
 import com.example.antiwispr.BackfillTranscriber
+import com.example.antiwispr.ChainMemberships
+import com.example.antiwispr.ChainOverrides
 import com.example.antiwispr.ChainSummaries
 import com.example.antiwispr.Chains
 import com.example.antiwispr.DetectionHealth
@@ -123,6 +125,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Keys of transcripts that belong to a chain (for list badges). */
     private val _chainKeys = MutableStateFlow<Set<String>>(emptySet())
     val chainKeys = _chainKeys.asStateFlow()
+    // Chain membership is mtime-based now, so recompute only when the library or the user's
+    // chain overrides change — not on every poll tick.
+    private var chainKeysSig = ""
 
     var searchQuery by mutableStateOf("")
 
@@ -207,7 +212,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val all = Transcripts.get(ctx).all()
         _recents.value = all.take(20)
         _history.value = all
-        _chainKeys.value = try { Chains.memberKeys(Transcripts.get(ctx)) } catch (_: Exception) { emptySet() }
+        val sig = "${all.size}:${all.maxOfOrNull { it.updatedAt } ?: 0L}:${ChainOverrides.get(ctx).generation()}:${ChainMemberships.get(ctx).generation()}"
+        if (sig != chainKeysSig) {
+            chainKeysSig = sig
+            _chainKeys.value = try { Chains.memberKeys(ctx) } catch (_: Exception) { emptySet() }
+        }
     }
 
     /** Called from AppRoot's resume hook — retries the watcher after all-files was granted. */

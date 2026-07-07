@@ -29,6 +29,13 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         // Stable id of the voice-note play/pause button (from the on-device node dump).
         const val CONTROL_BTN_ID = "com.whatsapp:id/control_btn"
 
+        /** Max rows to scan on each side of the played note when reading the chain run. */
+        private const val MAX_RUN = 25
+
+        /** Max send-time gap (minutes) between neighboring notes to still count as one burst.
+         *  A real chain is sent back-to-back; a bigger gap means they're unrelated. */
+        private const val MAX_BURST_GAP_MIN = 10
+
         /** The live orchestrator, exposed so the FCM push handler (a separate component in the
          *  same process) can deliver a finished cloud transcript to the on-screen overlay.
          *  Set on connect, cleared on unbind/destroy. */
@@ -43,6 +50,12 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     private lateinit var orchestrator: Orchestrator
 
     private val timeRegex = Regex("""\b(\d{1,2}):(\d{2})\b""")
+    // Duration words in a voice bubble's a11y description ("17 seconds", "1 minute 5 seconds").
+    private val secWordRegex = Regex("""(\d+)\s*second""", RegexOption.IGNORE_CASE)
+    private val minWordRegex = Regex("""(\d+)\s*minute""", RegexOption.IGNORE_CASE)
+    // Send time in a bubble desc: 12-hour "1:05 pm" (preferred) or a bare 24-hour "13:05".
+    private val clock12Regex = Regex("""(\d{1,2}):(\d{2})\s*([ap])\.?\s?m""", RegexOption.IGNORE_CASE)
+    private val clock24Regex = Regex("""\b([01]?\d|2[0-3]):([0-5]\d)\b""")
     private val clockFmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     private val main = Handler(Looper.getMainLooper())
     // When WE click the control to pause (pause-on-match), WhatsApp echoes a click event; ignore clicks
@@ -164,7 +177,15 @@ class WhatsAppAccessibilityService : AccessibilityService() {
                 else -> title
             }
             if (chatName != null) AppLog.i("[a11y] chat = \"$chatName\"")
-            orchestrator.onPlayTap(null, timestamp, chatName) // duration unused; index handles identification
+            // Read the consecutive same-sender voice run around this note straight from the chat —
+            // chat-scoped, so it can't merge across chats the way the filesystem heuristic did.
+            val run = try {
+                voiceRunAround(src)
+            } catch (e: Exception) {
+                AppLog.w("[a11y] voice-run read failed (non-fatal): ${e.message}"); null
+            }
+            if (run != null) AppLog.i("[a11y] voice run: ${run.durations.size} note(s), anchor@${run.anchorIndex}, durs=${run.durations}")
+            orchestrator.onPlayTap(null, timestamp, chatName, run) // duration unused; index identifies the note
         } else {
             AppLog.i("[a11y] orchestration disabled — skipping capture/match/transcribe.")
         }
@@ -264,6 +285,112 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     } catch (e: Exception) {
         AppLog.w("[a11y] chat title read failed (non-fatal): ${e.message}")
         null
+    }
+
+    // ---- chain run (consecutive same-sender voice notes around the played one) ----------
+
+    private data class RowInfo(val durationSec: Double?, val outgoing: Boolean, val sender: String?, val minuteOfDay: Int?)
+
+    /**
+     * Walk the chat message list up AND down from the played bubble, collecting the maximal run
+     * of CONSECUTIVE voice-note bubbles from the SAME speaker (same side + same sender name). The
+     * list is per-chat, so the run can never span chats — this is what makes chain membership
+     * correct (unlike the old device-global WA#### + mtime heuristic). Returns per-bubble
+     * durations in chat order with the played note's slot; null or a single-note run = "no chain".
+     * Only on-screen (non-recycled) rows are in the tree, so the run is bounded by the viewport.
+     */
+    fun voiceRunAround(played: AccessibilityNodeInfo): VoiceRun? {
+        val row = findMessageRow(played)
+        val list = row.parent ?: return null
+        val n = list.childCount
+        var anchorIdx = -1
+        for (i in 0 until n) if (list.getChild(i) == row) { anchorIdx = i; break }
+        if (anchorIdx < 0) return null
+
+        val anchorOutgoing = isOutgoing(played)
+        val anchorSender = senderNameFor(played) // null for own/DM; the name for a group bubble
+        val anchorInfo = parseVoiceRow(row)
+        fun sameSpeaker(info: RowInfo) = info.outgoing == anchorOutgoing && info.sender == anchorSender
+
+        // Walk up: keep consecutive same-speaker voice notes that are ALSO close in send time. A
+        // burst is minutes apart, so a large time gap (or an unreadable time) ends the run — this
+        // is what stops a lone note from chaining with an unrelated voice note sent hours earlier.
+        val before = ArrayList<Double?>()
+        var prev = anchorInfo?.minuteOfDay
+        var i = anchorIdx - 1
+        while (i >= 0 && anchorIdx - i <= MAX_RUN) {
+            val info = parseVoiceRow(list.getChild(i)) ?: break // a non-voice row ends the run
+            if (!sameSpeaker(info) || !withinBurst(info.minuteOfDay, prev)) break
+            before.add(info.durationSec); prev = info.minuteOfDay; i--
+        }
+        before.reverse() // chat order: earliest first
+
+        val after = ArrayList<Double?>()
+        prev = anchorInfo?.minuteOfDay
+        var j = anchorIdx + 1
+        while (j < n && j - anchorIdx <= MAX_RUN) {
+            val info = parseVoiceRow(list.getChild(j)) ?: break
+            if (!sameSpeaker(info) || !withinBurst(info.minuteOfDay, prev)) break
+            after.add(info.durationSec); prev = info.minuteOfDay; j++
+        }
+
+        val durations = ArrayList<Double?>(before.size + 1 + after.size)
+        durations.addAll(before)
+        durations.add(anchorInfo?.durationSec) // anchor (its duration may be null while playing)
+        durations.addAll(after)
+        if (durations.size < 2) return null // lone note → no chain
+        return VoiceRun(durations, before.size)
+    }
+
+    /** Same burst only if both send times are known and within a few minutes. Unknown time →
+     *  NOT the same burst (conservative: never chain across an unverifiable gap). */
+    private fun withinBurst(a: Int?, b: Int?): Boolean =
+        a != null && b != null && kotlin.math.abs(a - b) <= MAX_BURST_GAP_MIN
+
+    /** Parse a message row into (durationSec, outgoing, sender), or null if it isn't a voice note. */
+    private fun parseVoiceRow(row: AccessibilityNodeInfo?): RowInfo? {
+        row ?: return null
+        val desc = findVoiceRowDesc(row, 0) ?: return null // not a voice-note bubble
+        val outgoing = isOutgoingRow(row)
+        val sender = if (outgoing) null else (senderFromRowDesc(row) ?: senderLabelIn(row))
+        return RowInfo(durationFromDesc(desc), outgoing, sender, sendMinuteOfDay(desc))
+    }
+
+    /** "…, 17 seconds, …" or "…, 1 minute 5 seconds, …" → seconds. null when no duration words are
+     *  present — the send time ("1:05 pm") is deliberately NOT read as a duration. */
+    private fun durationFromDesc(desc: String): Double? {
+        val mins = minWordRegex.find(desc)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        val secs = secWordRegex.find(desc)?.groupValues?.get(1)?.toIntOrNull()
+        if (secs == null && mins == 0) return null
+        return (mins * 60 + (secs ?: 0)).toDouble()
+    }
+
+    /** The bubble's SEND time as a minute-of-day (0..1439), for the burst time-gap check. Prefers
+     *  12-hour "1:05 pm"; falls back to the last bare 24-hour "13:05" (the send time trails the
+     *  worded duration in the desc). null when no clock is present. */
+    private fun sendMinuteOfDay(desc: String): Int? {
+        clock12Regex.find(desc)?.let { m ->
+            val h = (m.groupValues[1].toIntOrNull() ?: return null) % 12
+            val min = m.groupValues[2].toIntOrNull() ?: return null
+            val pm = m.groupValues[3].equals("p", ignoreCase = true)
+            return h * 60 + min + (if (pm) 12 * 60 else 0)
+        }
+        val m = clock24Regex.findAll(desc).lastOrNull() ?: return null
+        val h = m.groupValues[1].toIntOrNull() ?: return null
+        val min = m.groupValues[2].toIntOrNull() ?: return null
+        return h * 60 + min
+    }
+
+    private fun isOutgoing(node: AccessibilityNodeInfo): Boolean {
+        val b = Rect().also { node.getBoundsInScreen(it) }
+        return b.left > resources.displayMetrics.widthPixels / 2
+    }
+
+    /** Incoming vs outgoing for a row: judge by the voice control's bounds (left/right aligned),
+     *  falling back to the row's own bounds. */
+    private fun isOutgoingRow(row: AccessibilityNodeInfo): Boolean {
+        val ctrl = row.findAccessibilityNodeInfosByViewId(CONTROL_BTN_ID)?.firstOrNull()
+        return isOutgoing(ctrl ?: row)
     }
 
     // ---- detection --------------------------------------------------------------

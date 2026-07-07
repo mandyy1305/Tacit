@@ -51,6 +51,9 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
     @Volatile private var sessionChatName: String? = null
     /** The matched note's chain (if any) for the current session — target of the chain toggle. */
     @Volatile private var pendingChain: Chain? = null
+    /** The consecutive same-sender voice run read off the chat at play-tap; maps to the chain
+     *  (chat-scoped, so it never merges across chats like the old filesystem heuristic did). */
+    @Volatile private var sessionRun: VoiceRun? = null
     /** The matched note file for the current session (summary-state restores on chain toggle-off). */
     @Volatile private var sessionFile: File? = null
     /** Card's "Transcribe all N" toggle — Summary tab yields the chain gist while true. */
@@ -89,9 +92,10 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         listenThread?.interrupt()
     }
 
-    fun onPlayTap(durationHintSec: Double?, timestamp: String?, chatName: String? = null) {
+    fun onPlayTap(durationHintSec: Double?, timestamp: String?, chatName: String? = null, run: VoiceRun? = null) {
         if (listening) { AppLog.i("[orchestrator] already listening — ignoring new tap."); return }
         sessionChatName = chatName
+        sessionRun = run
         pendingChain = null
         pendingSummary = null
         pendingCloud = null
@@ -321,12 +325,24 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         }
         overlay.setTranscript(transcript)
 
-        // Chain detection: does this note belong to a burst? Toggle-first — the card offers
-        // "Transcribe all N"; both tabs go burst-wide only when the user flips it on.
-        val chain = try { Chains.chainFor(appContext, file) } catch (t: Throwable) {
+        // Chain detection: does this note belong to a burst? Membership comes from the chat run
+        // read at play-tap (chat-scoped, sender-accurate); files are mapped by duration anchored
+        // on this acoustically-identified note. Toggle-first — the card offers "Transcribe all N".
+        val chain = try { Chains.chainFrom(appContext, file, sessionRun) } catch (t: Throwable) {
             AppLog.w("[chains] detection failed (non-fatal): ${t.message}"); null
         }
         pendingChain = chain
+        if (chain != null) {
+            // Persist the whole burst (incl. notes not transcribed yet) so the app reader can show
+            // it and offer "Transcribe all" — the app can't see the chat the way the overlay can.
+            runCatching {
+                ChainMemberships.get(appContext).record(chain.files.mapNotNull { f ->
+                    VoiceNotes.parseWhatsAppName(f.name)?.let { p ->
+                        ChainMemberships.Member(ChainOverrides.idOf(p.dateYmd, p.seq), f.absolutePath, p.dateYmd, p.seq)
+                    }
+                })
+            }
+        }
         if (chain != null && gen == generation) {
             AppLog.i("[chains] $name is part ${chain.partIndexOf(file)} of ${chain.size} (${chain.id}).")
             overlay.setChainInfo(chain.partIndexOf(file), chain.size)
