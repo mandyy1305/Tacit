@@ -247,23 +247,27 @@ object EntityLauncher {
 
     fun launch(context: Context, entity: ActionEntity): Boolean = when (entity.kind) {
         EntityKind.PHONE ->
-            start(context, Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(entity.data)}")))
+            start(context, Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(entity.data)}")), entity.text)
         EntityKind.EMAIL ->
-            start(context, Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${Uri.encode(entity.data)}")))
+            start(context, Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${Uri.encode(entity.data)}")), entity.text)
         EntityKind.ADDRESS ->
-            start(context, Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=${Uri.encode(entity.data)}")))
+            start(context, Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=${Uri.encode(entity.data)}")), entity.text)
         EntityKind.URL -> {
             val url = if (entity.data.contains("://")) entity.data else "https://${entity.data}"
-            start(context, Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            start(context, Intent(Intent.ACTION_VIEW, Uri.parse(url)), entity.data)
         }
         EntityKind.DATETIME -> launchDatetime(context, entity)
         EntityKind.AMOUNT -> {
-            context.getSystemService(ClipboardManager::class.java)
-                ?.setPrimaryClip(ClipData.newPlainText("Tacit amount", entity.data))
-            // 13+ shows the system clipboard chip; only older versions need our own notice.
-            if (Build.VERSION.SDK_INT < 33) Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+            copyToClipboard(context, "TACIT amount", entity.data)
             false // in-place action — never dismiss the card for a copy
         }
+    }
+
+    /** Copies to the clipboard; on 12L and below (no system paste chip) also shows a toast. */
+    private fun copyToClipboard(context: Context, label: String, text: String) {
+        context.getSystemService(ClipboardManager::class.java)
+            ?.setPrimaryClip(ClipData.newPlainText(label, text))
+        if (Build.VERSION.SDK_INT < 33) Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
     }
 
     private fun launchDatetime(context: Context, entity: ActionEntity): Boolean {
@@ -288,16 +292,24 @@ object EntityLauncher {
             Intent(Intent.ACTION_INSERT)
                 .setData(CalendarContract.Events.CONTENT_URI)
                 .putExtra(CalendarContract.Events.TITLE, entity.sourceLine),
+            entity.text,
         )
     }
 
-    private fun start(context: Context, intent: Intent): Boolean = try {
+    /** Launches [intent]; if no app can handle it, falls back to copying [fallbackCopy] so a chip
+     *  never does nothing. Returns true only when an external app actually opened. */
+    private fun start(context: Context, intent: Intent, fallbackCopy: String? = null): Boolean = try {
         // The overlay hands us the application context — cross-app launches need NEW_TASK.
         if (findActivity(context) == null) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
         true
     } catch (e: ActivityNotFoundException) {
-        AppLog.w("[entities] no app for ${intent.action} ${intent.data} — ignoring tap.")
+        if (fallbackCopy != null) {
+            AppLog.i("[entities] no app for ${intent.action} — copied instead.")
+            copyToClipboard(context, "TACIT", fallbackCopy)
+        } else {
+            AppLog.w("[entities] no app for ${intent.action} ${intent.data} — ignoring tap.")
+        }
         false
     }
 

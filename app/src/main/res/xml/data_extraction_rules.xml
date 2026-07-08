@@ -1,19 +1,25 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   Backup / transfer rules (API 31+). Same policy as backup_rules.xml: carry the transcript
+   library, chain data, and non-sensitive preferences; exclude auth tokens, the rebuildable
+   index (fpindex.bin), and the downloadable model packs (whisper/, llm/). <include> only, so
+   everything else is excluded by default. Applied to both cloud backup and device transfer.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <include domain="file" path="transcripts.bin" />
+        <include domain="file" path="chains.bin" />
+        <include domain="file" path="chainoverrides.bin" />
+        <include domain="file" path="chainmembers.bin" />
+        <include domain="sharedpref" path="tacit_toggles.xml" />
+        <include domain="sharedpref" path="tacit_cloud.xml" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <include domain="file" path="transcripts.bin" />
+        <include domain="file" path="chains.bin" />
+        <include domain="file" path="chainoverrides.bin" />
+        <include domain="file" path="chainmembers.bin" />
+        <include domain="sharedpref" path="tacit_toggles.xml" />
+        <include domain="sharedpref" path="tacit_cloud.xml" />
     </device-transfer>
-    -->
 </data-extraction-rules>

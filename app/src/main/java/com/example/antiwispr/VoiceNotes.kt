@@ -8,10 +8,11 @@ import kotlin.math.abs
 import kotlin.math.min
 
 /**
- * Resolves where WhatsApp keeps voice notes. WhatsApp moved them to Android/media/... on
- * Android 11+ (that subtree is readable with all-files access, unlike Android/data). We try
- * the known locations across WhatsApp / WhatsApp Business / legacy layouts and report what's
- * actually present on THIS device — so you can confirm the path or tell me a different one.
+ * Resolves where WhatsApp keeps voice notes. WhatsApp stores them under
+ * Android/media/com.whatsapp/... on Android 11+ (that subtree is readable with all-files access,
+ * unlike Android/data, and is kept OUT of MediaStore by a .nomedia marker, so a MediaStore query
+ * cannot see voice notes). We traverse the known WhatsApp / WhatsApp Business / legacy layouts and
+ * report what's actually present on THIS device.
  */
 object VoiceNotes {
 
@@ -113,9 +114,9 @@ object VoiceNotes {
         }
         val found = resolveFolders()
         if (found.isEmpty())
-            sb.appendLine("[voicenotes] NONE of the known paths exist. If yours differs, tell me the exact path and I'll add it.")
+            sb.appendLine("[voicenotes] NONE of the known paths exist. If notes exist but aren't found, grant all-files access.")
         else
-            sb.appendLine("[voicenotes] will use ${found.size} folder(s).")
+            sb.appendLine("[voicenotes] will use ${found.size} folder(s), ${listOpusFiles().size} file(s) total.")
         val s = sb.toString().trimEnd()
         AppLog.i(s)
         return s

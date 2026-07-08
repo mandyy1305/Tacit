@@ -1,5 +1,8 @@
 package com.example.antiwispr.ui.settings
 
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
@@ -9,21 +12,17 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -52,6 +51,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.antiwispr.BackfillTranscriber
+import com.example.antiwispr.BuildConfig
 import com.example.antiwispr.Toggles
 import com.example.antiwispr.cloud.AskLanguage
 import com.example.antiwispr.cloud.CloudAuth
@@ -74,7 +74,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Human-readable controls over the runtime Toggles + model management + Developer tools. */
+/** Product-language controls over the runtime Toggles, the on-device packs, account, privacy,
+ *  and (gated) developer tools. Vendor and model names never appear here; see the copy system. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -94,8 +95,14 @@ fun SettingsScreen(
     var showLanguageSheet by remember { mutableStateOf(false) }
     var showAskLanguageSheet by remember { mutableStateOf(false) }
     var showBackfillSheet by remember { mutableStateOf(false) }
+    var showDisclosure by remember { mutableStateOf(false) }
     var devOpen by remember { mutableStateOf(false) }
     var signInError by remember { mutableStateOf<String?>(null) }
+
+    // Developer options: always available in debug; in release only after the 7-tap unlock.
+    var devUnlocked by remember { mutableStateOf(BuildConfig.DEBUG) }
+    var versionTaps by remember { mutableStateOf(0) }
+    var lastTapMs by remember { mutableStateOf(0L) }
 
     Scaffold(containerColor = Color.Transparent) { pad ->
         Column(
@@ -123,129 +130,121 @@ fun SettingsScreen(
 
             Column(Modifier.padding(horizontal = Dimens.screenPad)) {
                 Spacer(Modifier.height(16.dp))
+                // Master switch (hero row).
                 ToggleRow(
-                    "TACIT active",
-                    if (setup.tacitEnabled) "Listening for voice notes when they play in WhatsApp."
-                    else "Off — no listening, matching, or overlay. Search and history still work.",
-                    initial = setup.tacitEnabled,
+                    if (setup.tacitEnabled) "TACIT is on." else "TACIT is off.",
+                    if (setup.tacitEnabled) "Reading voice notes when they play in WhatsApp."
+                    else "Not listening, not matching, no floating card. Your library and search still work.",
+                    checked = setup.tacitEnabled,
                 ) { vm.setTacitEnabled(it) }
 
-                Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
-                SectionHeader("Account")
-                Spacer(Modifier.height(4.dp))
-                when {
-                    !setup.cloudConfigured -> Text(
-                        "Cloud isn't configured — add google-services.json from the Firebase " +
-                            "console to app/src/main/assets and rebuild.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    !setup.signedIn -> Column {
-                        Text(
-                            "Sign in to back up your transcripts and unlock cloud transcription " +
-                                "and sharper summaries.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        TacitButton("Sign in with Google", onClick = {
-                            signInError = null
-                            scope.launch {
-                                CloudAuth.signIn(context)
-                                    .onSuccess { vm.onSignedIn() }
-                                    .onFailure { signInError = it.message }
-                            }
-                        }, modifier = Modifier.fillMaxWidth())
-                        signInError?.let {
-                            Spacer(Modifier.height(8.dp))
-                            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                        }
-                        Spacer(Modifier.height(10.dp))
-                        CloudUrlField(setup.cloudBaseUrl) { vm.setCloudBaseUrl(it) }
-                    }
-                    else -> Column {
-                        Row(
-                            Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    setup.accountEmail ?: "Signed in",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                )
-                                Text(
-                                    when {
-                                        setup.syncing -> "Syncing…"
-                                        setup.lastSyncMs > 0 -> "Synced ${relativeTime(setup.lastSyncMs).lowercase()}"
-                                        else -> "Not synced yet"
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            GhostButton("Sync now", onClick = { vm.syncNow() }, enabled = !setup.syncing)
-                            GhostButton("Sign out", onClick = { vm.signOut() })
-                        }
-                        ToggleRow(
-                            "Cloud transcription",
-                            "Sarvam AI via your server — pick output style and language below.",
-                            initial = setup.cloudTranscription,
-                        ) { vm.setCloudTranscription(it) }
-                        AnimatedVisibility(
-                            visible = setup.cloudTranscription,
-                            enter = expandVertically() + fadeIn(),
-                            exit = shrinkVertically() + fadeOut(),
-                        ) {
-                            Column {
-                                PickerRow("Output style", setup.sttMode.label) { showModeSheet = true }
-                                PickerRow("Spoken language", setup.sttLanguage.label) { showLanguageSheet = true }
+                // ACCOUNT (hidden entirely if the build genuinely lacks cloud configuration).
+                if (setup.cloudConfigured) {
+                    Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
+                    SectionHeader("Account")
+                    Spacer(Modifier.height(4.dp))
+                    if (!setup.signedIn) {
+                        Column {
+                            Text(
+                                "Sign in with Google to keep your transcripts backed up and use " +
+                                    "TACIT Cloud: sharper accuracy, 23 Indian languages, cloud summaries and Ask.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            TacitButton("Continue with Google", onClick = {
+                                signInError = null
+                                scope.launch {
+                                    CloudAuth.signIn(context)
+                                        .onSuccess { vm.onSignedIn() }
+                                        .onFailure { signInError = it.message }
+                                }
+                            }, modifier = Modifier.fillMaxWidth())
+                            signInError?.let {
+                                Spacer(Modifier.height(8.dp))
+                                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                             }
                         }
-                        ToggleRow(
-                            "Cloud summaries",
-                            "gpt-4o-mini via your server — better summaries and action items.",
-                            initial = setup.cloudSummaries,
-                        ) { vm.setCloudSummaries(it) }
-                        CloudUrlField(setup.cloudBaseUrl) { vm.setCloudBaseUrl(it) }
+                    } else {
+                        Column {
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        setup.accountEmail ?: "Signed in",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        when {
+                                            setup.syncing -> "Backing up…"
+                                            setup.lastSyncMs > 0 -> "Backed up ${relativeTime(setup.lastSyncMs).lowercase()}"
+                                            else -> "Not backed up yet"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                GhostButton("Sync now", onClick = { vm.syncNow() }, enabled = !setup.syncing)
+                                GhostButton("Sign out", onClick = { vm.signOut() })
+                            }
+                            ToggleRow(
+                                "Transcribe with TACIT Cloud",
+                                "Sharper accuracy in 23 Indian languages. Notes are sent securely, transcribed, then discarded.",
+                                checked = setup.cloudTranscription,
+                            ) { vm.setCloudTranscription(it) }
+                            AnimatedVisibility(
+                                visible = setup.cloudTranscription,
+                                enter = expandVertically() + fadeIn(),
+                                exit = shrinkVertically() + fadeOut(),
+                            ) {
+                                Column {
+                                    PickerRow("Output style", setup.sttMode.label) { showModeSheet = true }
+                                    PickerRow("Spoken language", setup.sttLanguage.label) { showLanguageSheet = true }
+                                    Text(
+                                        "Applies to TACIT Cloud transcription.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.outline,
+                                    )
+                                }
+                            }
+                            ToggleRow(
+                                "Summarize with TACIT Cloud",
+                                "Sharper briefs and action points. Also powers Ask.",
+                                checked = setup.cloudSummaries,
+                            ) { vm.setCloudSummaries(it) }
+                        }
                     }
                 }
 
+                // TRANSCRIPTION
                 Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
                 SectionHeader("Transcription")
                 Spacer(Modifier.height(4.dp))
                 Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 10.dp),
+                    Modifier.fillMaxWidth().padding(vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "Whisper model",
+                            "Offline transcription",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            if (setup.modelReady) "whisper-small · on-device · ready"
-                            else setup.modelStatus,
+                            if (setup.modelReady) "On this phone · 360 MB · works without internet"
+                            else setup.modelStatus.ifBlank { "Not downloaded · 360 MB · works without internet" },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     if (setup.modelReady) {
                         GhostButton("Delete", onClick = { confirmDeleteWhisper = true })
-                        GhostButton(
-                            "Re-download",
-                            onClick = { confirmRedownload = true },
-                            enabled = !setup.modelDownloading,
-                        )
+                        GhostButton("Re-download", onClick = { confirmRedownload = true }, enabled = !setup.modelDownloading)
                     } else {
-                        GhostButton(
-                            "Download",
-                            onClick = { vm.downloadModel() },
-                            enabled = !setup.modelDownloading,
-                        )
+                        GhostButton("Download", onClick = { vm.downloadModel() }, enabled = !setup.modelDownloading)
                     }
                 }
                 if (setup.modelDownloading) {
@@ -253,9 +252,9 @@ fun SettingsScreen(
                     Spacer(Modifier.height(10.dp))
                 }
                 LinkRow(
-                    "Make older notes searchable",
-                    if (setup.backfillRunning) "Working through your chosen period…"
-                    else "Transcribe a recent period so it appears in search and history.",
+                    "Catch up on older notes",
+                    if (setup.backfillRunning) "Working through your notes…"
+                    else "Transcribe a recent period so it shows in search and your library.",
                 ) { if (!setup.backfillRunning) showBackfillSheet = true }
                 if (setup.backfillRunning) {
                     ProgressCapsule(setup.backfillProgress, setup.backfillStatus)
@@ -264,41 +263,32 @@ fun SettingsScreen(
                     Spacer(Modifier.height(10.dp))
                 }
 
+                // SUMMARIES
                 Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
                 SectionHeader("Summaries")
                 Spacer(Modifier.height(4.dp))
                 Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 10.dp),
+                    Modifier.fillMaxWidth().padding(vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "Summary model",
+                            "Offline summaries",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            if (setup.llmReady) "Qwen 2.5 1.5B · on-device · ready"
-                            else setup.llmStatus.ifBlank { "not downloaded · 1.6 GB" },
+                            if (setup.llmReady) "On this phone · 1.6 GB"
+                            else setup.llmStatus.ifBlank { "Not downloaded · 1.6 GB" },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     if (setup.llmReady) {
                         GhostButton("Delete", onClick = { confirmDeleteLlm = true })
-                        GhostButton(
-                            "Re-download",
-                            onClick = { confirmRedownloadLlm = true },
-                            enabled = !setup.llmDownloading,
-                        )
+                        GhostButton("Re-download", onClick = { confirmRedownloadLlm = true }, enabled = !setup.llmDownloading)
                     } else {
-                        GhostButton(
-                            "Download",
-                            onClick = { vm.downloadLlm() },
-                            enabled = !setup.llmDownloading,
-                        )
+                        GhostButton("Download", onClick = { vm.downloadLlm() }, enabled = !setup.llmDownloading)
                     }
                 }
                 if (setup.llmDownloading) {
@@ -307,90 +297,135 @@ fun SettingsScreen(
                 }
                 PickerRow("Ask answers", setup.askLanguage.label) { showAskLanguageSheet = true }
                 Text(
-                    "Each note becomes a short brief with action items — generated entirely on this phone.",
+                    "Each note becomes a short brief with action points.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline,
                 )
 
+                // BEHAVIOUR
                 Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
                 SectionHeader("Behaviour")
                 Spacer(Modifier.height(4.dp))
                 ToggleRow(
                     "Transcribe automatically",
-                    "Listen, match and transcribe whenever a voice note plays.",
-                    initial = Toggles.orchestrationEnabled,
+                    "Read every voice note as it plays.",
+                    checked = Toggles.orchestrationEnabled,
                 ) { vm.setToggle(ToggleKey.Orchestration, it) }
                 ToggleRow(
                     "Pause the note once identified",
-                    "Stops playback the moment TACIT recognises the note.",
-                    initial = Toggles.pauseOnMatch,
+                    "Pauses WhatsApp playback so you can read instead of listen.",
+                    checked = Toggles.pauseOnMatch,
                 ) { vm.setToggle(ToggleKey.PauseOnMatch, it) }
                 ToggleRow(
                     "Microphone fallback",
-                    "Listen through the mic when screen share is off. Lower accuracy.",
-                    initial = Toggles.micFallbackEnabled,
+                    "When Precision listening is off, listen through the mic. Less accurate.",
+                    checked = Toggles.micFallbackEnabled,
                 ) { vm.setToggle(ToggleKey.MicFallback, it) }
 
+                // PRIVACY
                 Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
-                InkDivider()
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { devOpen = !devOpen }
-                        .padding(vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    SectionHeader("Developer", Modifier.weight(1f))
-                    val rot by animateFloatAsState(if (devOpen) 180f else 0f, label = "chevron")
-                    Icon(
-                        Icons.Filled.KeyboardArrowDown, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.rotate(rot),
-                    )
-                }
-                AnimatedVisibility(
-                    visible = devOpen,
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut(),
-                ) {
-                    Column {
-                        ToggleRow(
-                            "Diagnostic mode",
-                            "Dump WhatsApp's node tree on taps; show raw match details in the overlay.",
-                            initial = Toggles.diagnosticMode,
-                        ) { vm.setToggle(ToggleKey.DiagnosticMode, it) }
-                        ToggleRow(
-                            "Pause on play tap",
-                            "Click the control again right after a play tap (isolation test).",
-                            initial = Toggles.pauseOnPlay,
-                        ) { vm.setToggle(ToggleKey.PauseOnPlay, it) }
+                SectionHeader("Privacy")
+                Spacer(Modifier.height(4.dp))
+                LinkRow(
+                    "How TACIT reads WhatsApp",
+                    "The accessibility connection, explained.",
+                ) { showDisclosure = true }
 
-                        LinkRow("Preview overlay card", "Cycles fake listening → match → transcript over this screen.") {
-                            OverlayPreviewDriver.run(context)
-                        }
-                        LinkRow("Voice Notes folder report", "Where TACIT looks for .opus files on this device.") {
-                            showFolderReport = true
-                        }
-                        LinkRow(
-                            "Rebuild index",
-                            if (setup.indexBuilding) "Building…" else setup.indexStatus,
-                        ) { vm.buildIndex() }
-                        if (setup.indexBuilding) {
-                            ProgressCapsule(setup.indexProgress, setup.indexStatus)
-                            Spacer(Modifier.height(10.dp))
-                        }
-                        LinkRow("Open log", setup.detection) { onOpenLog() }
+                // ABOUT
+                Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
+                SectionHeader("About")
+                Spacer(Modifier.height(4.dp))
+                LinkRow("Version", "1.0 (1)") {
+                    val now = System.currentTimeMillis()
+                    versionTaps = if (now - lastTapMs < 3000) versionTaps + 1 else 1
+                    lastTapMs = now
+                    if (!devUnlocked && versionTaps >= 7) {
+                        devUnlocked = true
+                        Toast.makeText(context, "Developer options unlocked.", Toast.LENGTH_SHORT).show()
                     }
                 }
-
-                Spacer(Modifier.height(Dimens.sectionGap))
+                LinkRow("Rate TACIT", "Takes a minute, means a lot.") {
+                    val pkg = context.packageName
+                    val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pkg"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    val web = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$pkg"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    try { context.startActivity(market) } catch (_: Exception) {
+                        try { context.startActivity(web) } catch (_: Exception) {}
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
                 Text(
-                    "TACIT 1.0  ·  whisper-small  ·  sherpa-onnx  ·  fully on-device",
+                    "TACIT · Every voice note, read.",
                     modifier = Modifier.fillMaxWidth(),
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.outline,
                     textAlign = TextAlign.Center,
                 )
+
+                // DEVELOPER (gated)
+                if (devUnlocked) {
+                    Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
+                    InkDivider()
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { devOpen = !devOpen }
+                            .padding(vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        SectionHeader("Developer", Modifier.weight(1f))
+                        val rot by animateFloatAsState(if (devOpen) 180f else 0f, label = "chevron")
+                        Icon(
+                            Icons.Filled.KeyboardArrowDown, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.rotate(rot),
+                        )
+                    }
+                    AnimatedVisibility(
+                        visible = devOpen,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut(),
+                    ) {
+                        Column {
+                            ToggleRow(
+                                "Diagnostic mode",
+                                "Dump WhatsApp's node tree on taps; show raw match details in the overlay.",
+                                checked = Toggles.diagnosticMode,
+                            ) { vm.setToggle(ToggleKey.DiagnosticMode, it) }
+                            ToggleRow(
+                                "Pause on play tap",
+                                "Click the control again right after a play tap (isolation test).",
+                                checked = Toggles.pauseOnPlay,
+                            ) { vm.setToggle(ToggleKey.PauseOnPlay, it) }
+                            LinkRow("Preview overlay card", "Cycles fake listening, match and transcript over this screen.") {
+                                OverlayPreviewDriver.run(context)
+                            }
+                            LinkRow("Voice notes folder report", "Where TACIT looks for voice notes on this device.") {
+                                showFolderReport = true
+                            }
+                            LinkRow(
+                                "Rebuild index",
+                                if (setup.indexBuilding) "Building…" else setup.indexStatus,
+                            ) { vm.buildIndex() }
+                            if (setup.indexBuilding) {
+                                ProgressCapsule(setup.indexProgress, setup.indexStatus)
+                                Spacer(Modifier.height(10.dp))
+                            }
+                            if (BuildConfig.DEBUG) {
+                                CloudUrlField(setup.cloudBaseUrl) { vm.setCloudBaseUrl(it) }
+                                Text(
+                                    "Debug builds only.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                )
+                            }
+                            LinkRow("Open log", setup.detection) { onOpenLog() }
+                            LinkRow("Hide developer options", "") { devUnlocked = false; devOpen = false }
+                        }
+                    }
+                }
+
                 Spacer(Modifier.height(28.dp))
             }
         }
@@ -399,10 +434,10 @@ fun SettingsScreen(
     if (confirmRedownload) {
         AlertDialog(
             onDismissRequest = { confirmRedownload = false },
-            title = { Text("Re-download model?", style = MaterialTheme.typography.headlineSmall) },
+            title = { Text("Re-download the offline transcription pack?", style = MaterialTheme.typography.headlineSmall) },
             text = {
                 Text(
-                    "The current files are deleted and ~360 MB is fetched again. " +
+                    "The current files are removed and 360 MB is fetched again. " +
                         "Transcription is unavailable until it finishes.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -424,11 +459,11 @@ fun SettingsScreen(
     if (confirmDeleteWhisper) {
         AlertDialog(
             onDismissRequest = { confirmDeleteWhisper = false },
-            title = { Text("Delete Whisper model?", style = MaterialTheme.typography.headlineSmall) },
+            title = { Text("Delete the offline transcription pack?", style = MaterialTheme.typography.headlineSmall) },
             text = {
                 Text(
-                    "Frees ~360 MB. Transcription will use the cloud when you're signed in — " +
-                        "or you can re-download the model anytime.",
+                    "Frees 360 MB. With Pro, transcription continues through TACIT Cloud. " +
+                        "Without it, transcription stops until you download it again.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -449,11 +484,11 @@ fun SettingsScreen(
     if (confirmDeleteLlm) {
         AlertDialog(
             onDismissRequest = { confirmDeleteLlm = false },
-            title = { Text("Delete summary model?", style = MaterialTheme.typography.headlineSmall) },
+            title = { Text("Delete the offline summaries pack?", style = MaterialTheme.typography.headlineSmall) },
             text = {
                 Text(
-                    "Frees ~1.6 GB. Summaries will use the cloud when you're signed in — " +
-                        "or you can re-download the model anytime.",
+                    "Frees 1.6 GB. With Pro, summaries continue through TACIT Cloud. " +
+                        "Without it, summaries stop until you download it again.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -474,10 +509,10 @@ fun SettingsScreen(
     if (confirmRedownloadLlm) {
         AlertDialog(
             onDismissRequest = { confirmRedownloadLlm = false },
-            title = { Text("Re-download summary model?", style = MaterialTheme.typography.headlineSmall) },
+            title = { Text("Re-download the offline summaries pack?", style = MaterialTheme.typography.headlineSmall) },
             text = {
                 Text(
-                    "The current file is deleted and ~1.6 GB is fetched again. " +
+                    "The current file is removed and 1.6 GB is fetched again. " +
                         "Summaries are unavailable until it finishes.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -496,6 +531,43 @@ fun SettingsScreen(
         )
     }
 
+    if (showDisclosure) {
+        ModalBottomSheet(
+            onDismissRequest = { showDisclosure = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ) {
+            Column(
+                Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = Dimens.screenPad)
+                    .padding(bottom = 32.dp)
+            ) {
+                Text(
+                    "How TACIT reads WhatsApp",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(12.dp))
+                DisclosurePara("TACIT uses an Android accessibility service to know when a voice note starts playing.")
+                DisclosurePara(
+                    "What it reads. Inside WhatsApp only: the parts of the screen that belong to voice " +
+                        "note messages. That is the play button you tap, the note's length and time stamp, " +
+                        "and the sender's name shown on that message. It does not read your typed messages, " +
+                        "your other chats' text, other apps, or anything you type."
+                )
+                DisclosurePara(
+                    "Why it reads this. So TACIT can start reading the exact note you played, and label " +
+                        "the transcript with the sender and time."
+                )
+                DisclosurePara(
+                    "What is kept. The sender's name and the note's time are saved with your transcript on " +
+                        "this phone, and in your backup if you use TACIT Cloud. Everything else TACIT sees on " +
+                        "screen is processed in the moment and never stored, collected, or shared."
+                )
+            }
+        }
+    }
+
     if (showFolderReport) {
         ModalBottomSheet(
             onDismissRequest = { showFolderReport = false },
@@ -507,7 +579,7 @@ fun SettingsScreen(
                     .padding(bottom = 32.dp)
             ) {
                 Text(
-                    "Voice Notes folders",
+                    "Voice note folders",
                     style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
@@ -543,7 +615,7 @@ fun SettingsScreen(
             }
         }
         OptionPickerSheet(
-            title = "Make searchable",
+            title = "Catch up on older notes",
             options = listOf(7, 30, 90),
             selected = -1, // nothing pre-selected; picking a row starts the run
             label = { "Last $it days" },
@@ -551,8 +623,8 @@ fun SettingsScreen(
                 when (val n = counts?.get(days)) {
                     null -> "counting…"
                     0 -> "nothing new to transcribe"
-                    else -> "$n note${if (n == 1) "" else "s"} to transcribe" +
-                        if (setup.signedIn && setup.cloudTranscription) " (uses cloud transcription)" else ""
+                    else -> "$n note${if (n == 1) "" else "s"} to catch up" +
+                        if (setup.signedIn && setup.cloudTranscription) " · uses TACIT Cloud" else ""
                 }
             },
             onSelect = { days ->
@@ -573,7 +645,6 @@ fun SettingsScreen(
             onDismiss = { showModeSheet = false },
         )
     }
-
     if (showLanguageSheet) {
         OptionPickerSheet(
             title = "Spoken language",
@@ -586,7 +657,17 @@ fun SettingsScreen(
     }
 }
 
-/** Dev-facing server URL (e.g. http://192.168.1.5:8080 while the Go server runs locally). */
+@Composable
+private fun DisclosurePara(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(bottom = 12.dp),
+    )
+}
+
+/** Server URL (developer, debug builds only) while the tacit-cloud server runs locally. */
 @Composable
 private fun CloudUrlField(current: String, onChange: (String) -> Unit) {
     var value by remember { mutableStateOf(current) }
@@ -601,36 +682,28 @@ private fun CloudUrlField(current: String, onChange: (String) -> Unit) {
     )
 }
 
+/** Stateless controlled toggle row: the caller owns the value, so the switch never drifts from
+ *  its backing state (re-keyed on [checked]). */
 @Composable
 private fun ToggleRow(
     title: String,
     subtitle: String,
-    initial: Boolean,
+    checked: Boolean,
     onChange: (Boolean) -> Unit,
 ) {
-    var checked by remember { mutableStateOf(initial) }
+    var local by remember(checked) { mutableStateOf(checked) }
     Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 10.dp),
+        Modifier.fillMaxWidth().padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Switch(
-            checked = checked,
-            onCheckedChange = { checked = it; onChange(it) },
+            checked = local,
+            onCheckedChange = { local = it; onChange(it) },
             colors = SwitchDefaults.colors(
                 checkedTrackColor = MaterialTheme.colorScheme.primary,
                 checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
@@ -643,23 +716,12 @@ private fun ToggleRow(
 @Composable
 private fun PickerRow(title: String, value: String, onClick: () -> Unit) {
     Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                value,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+            Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Icon(
             Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
@@ -671,24 +733,13 @@ private fun PickerRow(title: String, value: String, onClick: () -> Unit) {
 @Composable
 private fun LinkRow(title: String, subtitle: String, onClick: () -> Unit) {
     Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
+            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
             if (subtitle.isNotBlank()) {
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         Icon(

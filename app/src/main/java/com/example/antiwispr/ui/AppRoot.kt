@@ -32,6 +32,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.antiwispr.AppLog
 import com.example.antiwispr.ProjectionService
+import com.example.antiwispr.Toggles
 import com.example.antiwispr.Transcripts
 import com.example.antiwispr.ui.history.HistoryScreen
 import com.example.antiwispr.ui.home.HomeScreen
@@ -53,6 +54,7 @@ class SetupActions(
     val buildIndex: () -> Unit,
     val startSession: () -> Unit,
     val stopSession: () -> Unit,
+    val turnOn: () -> Unit,
 )
 
 @Composable
@@ -135,6 +137,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 }
             },
             stopSession = { vm.stopSession() },
+            turnOn = { vm.setTacitEnabled(true) },
         )
     }
 
@@ -156,7 +159,9 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
         vm.pendingOpenKey = null
     }
 
-    val start = remember { if (vm.setup.value.setupComplete) "home" else "onboarding" }
+    val start = remember {
+        if (Toggles.onboardingDone || vm.setup.value.setupComplete) "home" else "onboarding"
+    }
 
     NavHost(
         navController = nav,
@@ -179,7 +184,10 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
             OnboardingScreen(
                 setup = setup,
                 actions = actions,
-                onFinished = { nav.navigate("home") { popUpTo(0) { inclusive = true } } },
+                onFinished = {
+                    vm.markOnboardingDone()
+                    nav.navigate("home") { popUpTo(0) { inclusive = true } }
+                },
             )
         }
         composable("home") {

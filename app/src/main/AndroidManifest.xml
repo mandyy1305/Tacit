@@ -6,9 +6,18 @@
          RECORD_AUDIO is also required to build ANY AudioRecord, including the
          internal-audio (AudioPlaybackCapture) path. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <!-- All-files access so we can read WhatsApp's .opus voice notes (Android 11+). -->
+    <!-- WhatsApp voice notes live under Android/media/com.whatsapp/.../WhatsApp Voice Notes/ and are
+         kept OUT of MediaStore by a .nomedia marker, so MediaStore.Audio cannot see them (it only
+         indexes the WhatsApp Audio folder). Direct file access is therefore the only reliable path,
+         which on Android 11+ needs all-files access. READ_MEDIA_AUDIO is kept only so the MediaStore
+         supplement can pick up the Audio folder. TODO (Play compliance): replace all-files with a
+         Storage Access Framework folder grant (ACTION_OPEN_DOCUMENT_TREE on the Voice Notes folder);
+         until that ships, all-files is required for the app to function. -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
 
     <!-- Internal audio capture (MediaProjection + AudioPlaybackCapture) must run from a
          foreground service. FOREGROUND_SERVICE has existed since API 28; the typed

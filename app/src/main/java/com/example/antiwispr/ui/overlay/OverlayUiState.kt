@@ -53,13 +53,12 @@ internal fun interpretStatus(raw: String): StatusInfo = when {
 internal fun humanizeNotice(bracket: String): String {
     val t = bracket.trim().removePrefix("[").removeSuffix("]")
     return when {
-        t.startsWith("no confident match") -> "No confident match. Try replaying the note."
-        t.startsWith("whisper model not downloaded") ->
-            "The Whisper model isn't downloaded yet — open TACIT and finish setup."
-        t.startsWith("whisper model not ready") -> "Whisper isn't ready yet — try again in a moment."
+        t.startsWith("no confident match") -> "No confident match. Replay the note and TACIT listens again."
+        t.startsWith("whisper model not downloaded") -> "Transcription isn't set up yet."
+        t.startsWith("whisper model not ready") -> "The transcriber is still warming up."
         t.startsWith("no speech detected") -> "No speech detected in this note."
         t.startsWith("no audio decoded") -> "Couldn't read this note's audio."
-        t.startsWith("matching error") -> "Something went wrong while matching — try again."
+        t.startsWith("matching error") -> "Something went wrong while matching."
         else -> t.replaceFirstChar { it.uppercase() }
     }
 }

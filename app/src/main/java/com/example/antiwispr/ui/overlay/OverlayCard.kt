@@ -21,10 +21,14 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import android.content.ClipData
+import android.content.ClipboardManager
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,6 +54,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -76,6 +81,7 @@ import com.example.antiwispr.ui.theme.Fraunces
 import com.example.antiwispr.ui.theme.Inter
 import com.example.antiwispr.ui.theme.TacitTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
@@ -240,12 +246,18 @@ private fun MicFallbackPill(onShare: () -> Unit) {
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            "Screen not shared — using mic",
-            modifier = Modifier.weight(1f),
-            fontFamily = Inter, fontSize = 12.sp,
-            color = OverlayPalette.ink,
-        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Using the mic for this one.",
+                fontFamily = Inter, fontWeight = FontWeight.Medium,
+                fontSize = 13.sp, color = OverlayPalette.ink,
+            )
+            Text(
+                "Screen share hears notes directly. Surer matches.",
+                fontFamily = Inter, fontSize = 11.sp,
+                color = OverlayPalette.inkMuted,
+            )
+        }
         Spacer(Modifier.width(8.dp))
         Box(
             Modifier
@@ -605,7 +617,7 @@ private fun SummaryPane(state: OverlayUiState, onEntityTap: (ActionEntity) -> Un
                 TranscribingShimmer()
             }
             SummaryState.UNAVAILABLE -> Text(
-                "Summaries need a one-time model download — open TACIT → Settings → Summaries.",
+                "Summaries need a one-time setup. Open TACIT to set them up.",
                 fontFamily = Inter, fontSize = 13.sp,
                 color = OverlayPalette.inkMuted,
             )
@@ -668,23 +680,37 @@ private fun SummaryPane(state: OverlayUiState, onEntityTap: (ActionEntity) -> Un
     }
 }
 
-/** Tappable entity pills (the concrete ask) — overlay-styled clone of the chain toggle pill. */
+/** Tappable entity pills (the concrete ask) — overlay-styled clone of the chain toggle pill.
+ *  Tap acts (call, map, calendar); long-press copies the full text so a truncated chip is
+ *  never a dead end. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EntityChipsFlow(entities: List<ActionEntity>, onTap: (ActionEntity) -> Unit) {
+    val context = LocalContext.current
+    var copiedText by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(copiedText) { if (copiedText != null) { delay(1500); copiedText = null } }
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         entities.forEach { entity ->
+            val copied = copiedText == entity.text
             Box(
                 Modifier
                     .clip(RoundedCornerShape(8.dp))
                     .border(1.dp, OverlayPalette.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                    .clickable { onTap(entity) }
+                    .combinedClickable(
+                        onClick = { onTap(entity) },
+                        onLongClick = {
+                            context.getSystemService(ClipboardManager::class.java)
+                                ?.setPrimaryClip(ClipData.newPlainText("TACIT", entity.text))
+                            copiedText = entity.text
+                        },
+                    )
                     .padding(horizontal = 10.dp, vertical = 5.dp),
             ) {
                 Text(
-                    entity.text,
+                    if (copied) "Copied ✓" else entity.text,
                     fontFamily = Inter, fontWeight = FontWeight.Medium,
                     fontSize = 12.sp, color = OverlayPalette.accent,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -704,7 +730,7 @@ private fun NoMatchBody() {
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            "Try replaying the note — TACIT listens again from the start.",
+            "Replay the note and TACIT listens again from the start.",
             fontFamily = Inter, fontSize = 13.sp,
             color = OverlayPalette.inkMuted,
         )

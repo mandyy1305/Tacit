@@ -1,7 +1,10 @@
 package com.example.antiwispr.ui.components
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -28,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.antiwispr.ActionEntity
@@ -38,14 +42,17 @@ import kotlinx.coroutines.delay
  * Tappable pills for the actionable entities pulled out of a summary — the reader's
  * surface for "the ask" (call this number, be there then, pay this much). AMOUNT taps
  * copy in place and flash a confirmation; everything else launches out via [onTap].
+ * Long-pressing ANY chip copies its full text, so a truncated address is never unreachable.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun EntityChipsRow(
     entities: List<ActionEntity>,
     onTap: (ActionEntity) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // Which amount chip just copied (flash "Copied ✓" for a beat, same idiom as the copy button).
+    val context = LocalContext.current
+    // Which chip just copied (flash "Copied ✓" for a beat, same idiom as the copy button).
     var copiedText by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(copiedText) {
         if (copiedText != null) { delay(1500); copiedText = null }
@@ -56,15 +63,22 @@ fun EntityChipsRow(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         entities.forEach { entity ->
-            val copied = entity.kind == EntityKind.AMOUNT && copiedText == entity.text
+            val copied = copiedText == entity.text
             Row(
                 Modifier
                     .clip(RoundedCornerShape(9.dp))
                     .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f))
-                    .clickable {
-                        onTap(entity)
-                        if (entity.kind == EntityKind.AMOUNT) copiedText = entity.text
-                    }
+                    .combinedClickable(
+                        onClick = {
+                            onTap(entity)
+                            if (entity.kind == EntityKind.AMOUNT) copiedText = entity.text
+                        },
+                        onLongClick = {
+                            context.getSystemService(ClipboardManager::class.java)
+                                ?.setPrimaryClip(ClipData.newPlainText("TACIT", entity.text))
+                            copiedText = entity.text
+                        },
+                    )
                     .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

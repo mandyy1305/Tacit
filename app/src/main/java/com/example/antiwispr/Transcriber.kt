@@ -9,15 +9,3 @@ import java.io.File
 interface Transcriber {
     fun transcribe(file: File): String
 }
-
-/**
- * ===================== STUB — NOT REAL TRANSCRIPTION =====================
- * Returns a placeholder string. Swap for a real Transcriber when ready.
- * =========================================================================
- */
-class StubTranscriber : Transcriber {
-    override fun transcribe(file: File): String {
-        AppLog.i("[transcriber STUB] transcribe(${file.name}) — returning placeholder.")
-        return "[transcript placeholder for ${file.name}]"
-    }
-}

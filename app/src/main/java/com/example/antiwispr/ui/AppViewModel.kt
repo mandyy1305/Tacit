@@ -91,12 +91,41 @@ data class SetupStatus(
     val sessionActive: Boolean = false,
     val transcriptCount: Int = 0,
     val detection: String = "",
+    val autoRead: Boolean = true,       // mirror of Toggles.orchestrationEnabled (for observability)
+    val whatsAppInstalled: Boolean = true,
 ) {
     /** Notifications are deliberately optional (capture works without the FGS notice).
-     *  A signed-in user can run cloud-only — local Whisper is then optional too. */
+     *  A signed-in user can run cloud-only — the offline pack is then optional too. */
     val setupComplete: Boolean
         get() = mic && overlay && files && accessibility && (modelReady || signedIn) && indexReady
+
+    /** The four grants TACIT cannot work without. */
+    val coreGrantsOk: Boolean get() = mic && overlay && files && accessibility
+
+    /** Something can transcribe: the offline pack, or a usable cloud path (signed in + cloud on).
+     *  When entitlements ship this tightens to "entitled", not merely "signed in" (doc 01 §0). */
+    val engineReady: Boolean get() = modelReady || (signedIn && cloudTranscription)
+
+    /** True while an engine is on its way (pack download) so a missing engine reads as
+     *  "getting ready" rather than "broken". */
+    private val engineArriving: Boolean get() = modelDownloading
+
+    val detectionDegraded: Boolean get() = detection.startsWith("⚠")
+
+    /** The single readiness model consumed by Home, onboarding, and notifications (doc 01 §0).
+     *  Priority ordered: OFF, NEEDS_SETUP, ATTENTION, GETTING_READY, READY. */
+    val health: SetupHealth
+        get() = when {
+            !tacitEnabled -> SetupHealth.OFF
+            !coreGrantsOk -> SetupHealth.NEEDS_SETUP
+            (!engineReady && !engineArriving) || detectionDegraded -> SetupHealth.ATTENTION
+            modelDownloading || llmDownloading || (indexBuilding && !indexReady) -> SetupHealth.GETTING_READY
+            else -> SetupHealth.READY
+        }
 }
+
+/** The five macro states of readiness (doc 01 §0). Home renders exactly one. */
+enum class SetupHealth { OFF, NEEDS_SETUP, ATTENTION, GETTING_READY, READY }
 
 enum class ToggleKey { DiagnosticMode, PauseOnPlay, Orchestration, MicFallback, PauseOnMatch }
 
@@ -171,7 +200,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             tacitEnabled = Toggles.tacitEnabled,
             mic = hasRecord(ctx),
             overlay = Settings.canDrawOverlays(ctx),
-            files = Environment.isExternalStorageManager(),
+            files = hasAudioAccess(ctx),
             notifications = notifGranted(ctx),
             accessibility = isAccessibilityEnabled(ctx),
             modelReady = WhisperModel.isReady(ctx),
@@ -208,6 +237,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             sessionActive = ProjectionService.sessionActive,
             transcriptCount = Transcripts.get(ctx).count(),
             detection = DetectionHealth.summary(),
+            autoRead = Toggles.orchestrationEnabled,
+            whatsAppInstalled = isWhatsAppInstalled(ctx),
         )
         val all = Transcripts.get(ctx).all()
         _recents.value = all.take(20)
@@ -327,8 +358,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun buildIndex() {
         val ctx = getApplication<Application>().applicationContext
-        if (!Environment.isExternalStorageManager())
-            AppLog.i("note: grant all-files access first, or the index will find 0 files.")
+        if (!hasAudioAccess(ctx))
+            AppLog.i("note: grant voice-note (audio) access first, or the index will find 0 files.")
         IndexHolder.get(ctx).loadOrBuild { AppLog.i(it); refresh() }
         refresh()
     }
@@ -368,14 +399,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
+    /** Persisted once the onboarding Done screen is reached; the app then always starts on Home. */
+    fun markOnboardingDone() {
+        Toggles.setOnboardingDone(getApplication<Application>().applicationContext, true)
+    }
+
     fun setToggle(key: ToggleKey, value: Boolean) {
+        val ctx = getApplication<Application>().applicationContext
         when (key) {
-            ToggleKey.DiagnosticMode -> { Toggles.diagnosticMode = value; AppLog.i("diagnosticMode = $value") }
-            ToggleKey.PauseOnPlay -> { Toggles.pauseOnPlay = value; AppLog.i("pauseOnPlay = $value") }
-            ToggleKey.Orchestration -> { Toggles.orchestrationEnabled = value; AppLog.i("orchestrationEnabled = $value") }
-            ToggleKey.MicFallback -> { Toggles.micFallbackEnabled = value; AppLog.i("micFallbackEnabled = $value") }
-            ToggleKey.PauseOnMatch -> { Toggles.pauseOnMatch = value; AppLog.i("pauseOnMatch = $value") }
+            ToggleKey.DiagnosticMode -> Toggles.diagnosticMode = value          // session-scoped
+            ToggleKey.PauseOnPlay -> Toggles.pauseOnPlay = value                 // session-scoped
+            ToggleKey.Orchestration -> Toggles.setOrchestration(ctx, value)      // persisted
+            ToggleKey.MicFallback -> Toggles.setMicFallback(ctx, value)          // persisted
+            ToggleKey.PauseOnMatch -> Toggles.setPauseOnMatch(ctx, value)        // persisted
         }
+        AppLog.i("$key = $value")
         refresh()
     }
 
@@ -444,6 +482,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun hasRecord(ctx: Context) =
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    private fun isWhatsAppInstalled(ctx: Context): Boolean = try {
+        ctx.packageManager.getPackageInfo("com.whatsapp", 0); true
+    } catch (_: PackageManager.NameNotFoundException) { false } catch (_: Exception) { true }
+
+    /** Voice-note access. Direct file reads are the only reliable way to see WhatsApp voice notes
+     *  (MediaStore skips the .nomedia'd Voice Notes folder), so all-files access is required on 11+. */
+    fun hasAudioAccess(ctx: Context): Boolean = Environment.isExternalStorageManager()
 
     private fun notifGranted(ctx: Context): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
