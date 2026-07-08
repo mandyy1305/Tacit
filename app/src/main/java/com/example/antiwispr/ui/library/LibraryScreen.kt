@@ -1,4 +1,4 @@
-package com.example.antiwispr.ui.history
+package com.example.antiwispr.ui.library
 
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -7,13 +7,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -33,17 +36,17 @@ import com.example.antiwispr.ui.components.TranscriptCard
 import com.example.antiwispr.ui.theme.Dimens
 
 /**
- * The whole library, newest first: cloud-synced records and locally transcribed ones live in
- * the same store, so one list covers both. On-device transcriptions carry an ON-DEVICE badge
- * (see TranscriptCard); long-press copies. Opening the screen nudges a sync so anything new
- * on the server appears (no-op when signed out).
+ * The Library: the full transcript corpus, newest first. Cloud-synced and locally transcribed
+ * records live in the same store, so one list covers both. Opening the screen nudges a sync so
+ * anything new on the server appears (no-op when signed out). Long-press a card to copy it.
  */
 @Composable
-fun HistoryScreen(
-    history: List<StoredTranscript>,
+fun LibraryScreen(
+    library: List<StoredTranscript>,
     chainKeys: Set<String> = emptySet(),
     onBack: () -> Unit,
     onOpen: (StoredTranscript) -> Unit,
+    onOpenSearch: () -> Unit = {},
 ) {
     val context = LocalContext.current
     LaunchedEffect(Unit) { SyncEngine.requestSync(context) }
@@ -67,26 +70,43 @@ fun HistoryScreen(
                     )
                 }
                 Text(
-                    "History",
+                    "Library",
+                    modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
+                IconButton(onClick = onOpenSearch) {
+                    Icon(
+                        Icons.Filled.Search, contentDescription = "Search your notes",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
-            if (history.isEmpty()) {
+            if (library.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        "Nothing here yet.\nTranscripts appear as notes are played, " +
-                            "auto-transcribed, or synced from your cloud account.",
-                        modifier = Modifier.padding(Dimens.screenPad),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.outline,
-                        textAlign = TextAlign.Center,
-                    )
+                    Column(
+                        Modifier.padding(Dimens.screenPad),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            "Nothing here yet.",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Transcripts appear as notes play, or sync from your other phone.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.outline,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
             } else {
                 Text(
-                    if (history.size == 1) "1 transcript" else "${history.size} transcripts",
+                    if (library.size == 1) "1 transcript" else "${library.size} transcripts",
                     modifier = Modifier.padding(horizontal = Dimens.screenPad, vertical = 6.dp),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -98,7 +118,7 @@ fun HistoryScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(Dimens.itemGap),
                 ) {
-                    items(history, key = { it.key }) { t ->
+                    items(library, key = { it.key }) { t ->
                         TranscriptCard(
                             t,
                             chained = t.key in chainKeys,
@@ -106,7 +126,7 @@ fun HistoryScreen(
                             onLongPress = {
                                 context.getSystemService(ClipboardManager::class.java)
                                     ?.setPrimaryClip(
-                                        ClipData.newPlainText("Tacit transcript", t.text)
+                                        ClipData.newPlainText("TACIT transcript", t.text)
                                     )
                             },
                         )

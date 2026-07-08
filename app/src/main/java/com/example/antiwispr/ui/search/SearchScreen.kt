@@ -147,12 +147,12 @@ fun SearchScreen(
         askBusy = true
         askRaw = null
         scope.launch {
-            askStatus = "Searching your notes…"
+            askStatus = "Finding the right notes…"
             val hits = withContext(Dispatchers.Default) {
                 SearchEngine.retrieveForAsk(Transcripts.get(context).all(), q, filters)
             }
             askHits = hits
-            askStatus = "Thinking…"
+            askStatus = "Reading ${hits.size} note${if (hits.size == 1) "" else "s"}…"
             askRaw = withContext(Dispatchers.IO) { Summarizer.askBlocking(context, q, hits) }
             askBusy = false
         }
@@ -184,7 +184,7 @@ fun SearchScreen(
                         .focusRequester(focusRequester),
                     placeholder = {
                         Text(
-                            if (mode == 0) "Search transcripts…" else "Ask about your notes…",
+                            if (mode == 0) "Search your notes…" else "Ask about your notes…",
                             style = MaterialTheme.typography.headlineSmall,
                             color = MaterialTheme.colorScheme.outline,
                         )
@@ -226,7 +226,7 @@ fun SearchScreen(
             if (mode == 0) {
                 SearchResults(trimmed, results, chainKeys, onOpen) { text ->
                     context.getSystemService(ClipboardManager::class.java)
-                        ?.setPrimaryClip(ClipData.newPlainText("Tacit transcript", text))
+                        ?.setPrimaryClip(ClipData.newPlainText("TACIT transcript", text))
                 }
             } else {
                 AskPane(
@@ -275,9 +275,10 @@ private fun SearchResults(
     Crossfade(targetState = trimmed.length >= 2, label = "searchState") { searching ->
         if (!searching) {
             CenteredHint(
-                "Every word of every transcript is searchable — Hindi bhi, " +
-                    "chaahe kisi bhi script mein ho.\nType at least 2 characters.\n\n" +
-                    "Only transcribed notes appear; make older notes searchable from Settings."
+                "Every word is searchable, in almost any spelling.\n" +
+                    "Typing ghar finds घर. Hindi bhi, chaahe kisi bhi script mein ho.\n" +
+                    "Type at least 2 characters.\n\n" +
+                    "Only transcribed notes appear here. Catch up older notes from Settings."
             )
         } else {
             Column(Modifier.fillMaxSize()) {
@@ -341,8 +342,8 @@ private fun AskPane(
             raw == null -> {
                 Spacer(Modifier.height(48.dp))
                 Text(
-                    "Ask in your own words — \"kya address bheja tha Rahul ne last week?\"\n\n" +
-                        "TACIT finds the matching notes and answers from them. " +
+                    "Ask in your own words.\n\"kya address bheja tha Rahul ne last week?\"\n\n" +
+                        "TACIT reads your matching notes and answers from them. " +
                         "Press search to ask.",
                     modifier = Modifier.fillMaxWidth(),
                     style = MaterialTheme.typography.bodyMedium,

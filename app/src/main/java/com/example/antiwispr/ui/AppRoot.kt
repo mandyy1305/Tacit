@@ -34,8 +34,8 @@ import com.example.antiwispr.AppLog
 import com.example.antiwispr.ProjectionService
 import com.example.antiwispr.Toggles
 import com.example.antiwispr.Transcripts
-import com.example.antiwispr.ui.history.HistoryScreen
 import com.example.antiwispr.ui.home.HomeScreen
+import com.example.antiwispr.ui.library.LibraryScreen
 import com.example.antiwispr.ui.onboarding.OnboardingScreen
 import com.example.antiwispr.ui.search.SearchScreen
 import com.example.antiwispr.ui.settings.LogScreen
@@ -198,17 +198,18 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 actions = actions,
                 onOpenSettings = { nav.navigate("settings") },
                 onOpenSearch = { nav.navigate("search") },
-                onOpenHistory = { nav.navigate("history") },
+                onOpenLibrary = { nav.navigate("library") },
                 onOpenTranscript = { vm.selectedTranscript = it; nav.navigate("transcript") },
                 onFinishSetup = { nav.navigate("onboarding") },
             )
         }
-        composable("history") {
-            HistoryScreen(
-                history = history,
+        composable("library") {
+            LibraryScreen(
+                library = history,
                 chainKeys = chainKeys,
                 onBack = { nav.popBackStack() },
                 onOpen = { vm.selectedTranscript = it; nav.navigate("transcript") },
+                onOpenSearch = { nav.navigate("search") },
             )
         }
         composable("search") {

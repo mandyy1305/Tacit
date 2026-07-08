@@ -72,7 +72,7 @@ fun HomeScreen(
     actions: SetupActions,
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
-    onOpenHistory: () -> Unit = {},
+    onOpenLibrary: () -> Unit = {},
     onOpenTranscript: (StoredTranscript) -> Unit,
     onFinishSetup: () -> Unit,
 ) {
@@ -125,7 +125,7 @@ fun HomeScreen(
                     SectionHeader("Recent")
                     Spacer(Modifier.weight(1f))
                     if (setup.transcriptCount > 0) {
-                        TextButton(onClick = onOpenHistory) {
+                        TextButton(onClick = onOpenLibrary) {
                             Text(
                                 "View all ${setup.transcriptCount}",
                                 style = MaterialTheme.typography.labelMedium,
