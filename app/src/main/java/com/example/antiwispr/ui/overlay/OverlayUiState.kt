@@ -9,6 +9,9 @@ enum class OverlayPhase { LISTENING, MATCHED, TRANSCRIBING, TRANSCRIPT, CLOSE_MA
 
 enum class SummaryState { NONE, GENERATING, READY, UNAVAILABLE }
 
+/** The single recovery action a notice card may carry (doc 02 §2.J). */
+enum class NoticeAction { NONE, FINISH_SETUP, TRY_AGAIN, SHARE_SCREEN, LISTEN_AGAIN }
+
 /** Human-facing description of the matched note: "30 Jun · 0:42" (or "Voice note"). */
 data class MatchInfo(val meta: String)
 
@@ -22,6 +25,7 @@ data class OverlayUiState(
     val match: MatchInfo? = null,        // survives MATCHED → TRANSCRIBING → TRANSCRIPT
     val transcript: String? = null,
     val notice: String? = null,          // humanized bracket-message ("[no confident match …]")
+    val noticeAction: NoticeAction = NoticeAction.NONE, // recovery button the notice card offers
     val summaryState: SummaryState = SummaryState.NONE,
     val summaryRaw: String? = null,      // raw "SUMMARY:/ACTIONS:" text; parsed at render time
     val chainPart: Int = 0,              // this note's position in its burst (0 = no chain)
@@ -62,6 +66,17 @@ internal fun humanizeNotice(bracket: String): String {
         t.startsWith("no audio decoded") -> "Couldn't read this note's audio."
         t.startsWith("matching error") -> "Something went wrong while matching."
         else -> t.replaceFirstChar { it.uppercase() }
+    }
+}
+
+/** The recovery action for a bracket notice, paired with [humanizeNotice]'s copy. */
+internal fun noticeActionFor(bracket: String): NoticeAction {
+    val t = bracket.trim().removePrefix("[").removeSuffix("]")
+    return when {
+        t.startsWith("whisper model not downloaded") -> NoticeAction.FINISH_SETUP
+        t.startsWith("whisper model not ready") -> NoticeAction.TRY_AGAIN
+        t.startsWith("matching error") -> NoticeAction.LISTEN_AGAIN
+        else -> NoticeAction.NONE
     }
 }
 

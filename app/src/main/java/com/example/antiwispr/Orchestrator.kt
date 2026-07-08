@@ -59,6 +59,8 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
     /** Ranked candidates surfaced to the card (close-matches picker / "Wrong note?"); index-aligned
      *  with the rows so a tapped row commits the right file. */
     @Volatile private var sessionCandidates: List<CandidateFile> = emptyList()
+    /** The committed match for the current session (target of the "Try again" notice retry). */
+    @Volatile private var sessionMatch: CandidateFile? = null
     /** Card's "Transcribe all N" toggle — Summary tab yields the chain gist while true. */
     @Volatile private var chainModeEnabled = false
     /** Armed when the transcript is summarizable but nothing is cached — the Summary tab's
@@ -86,6 +88,8 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         overlay.onRequestSummary = { requestNoteSummary() }
         overlay.onCommitCandidate = { i -> commitCandidate(i) }
         overlay.onNoneOfThese = { overlay.showNoMatch() }
+        overlay.onTryAgain = { retryTranscript() }
+        overlay.onListenAgain = { listenAgain() }
     }
 
     /** Abort an in-progress listen (called on pause, overlay-dismiss, etc.). Interrupts the worker so
@@ -254,6 +258,7 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         // Keep a few runner-ups so a confident-but-wrong match still has recourse ("Wrong note?").
         val alts = ranked.take(4).mapIndexed { idx, s -> toCandidate(s, withDuration = idx < 3) }
         sessionCandidates = alts
+        sessionMatch = cand
         overlay.setCandidates(alts, true) // show result (first = top) + mark card sticky BEFORE the pause click
         if (Toggles.pauseOnMatch && !cancelRequested) {
             AppLog.i("[orchestrator] match confirmed — pausing WhatsApp playback.")
@@ -273,10 +278,32 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         val picked = sessionCandidates.getOrNull(index) ?: return
         val cand = if (picked.durationSec < 0) picked.copy(durationSec = readDurationSec(picked.file)) else picked
         AppLog.i("[orchestrator] user committed candidate #$index: ${cand.name}")
+        sessionMatch = cand
         overlay.setCandidates(listOf(cand), true) // → MATCHED with the chosen note (keeps card sticky)
         if (Toggles.pauseOnMatch) onMatchPause?.invoke()
         val gen = generation
         transcribeExec.execute { resolveTranscriptAndSummary(cand, gen) }
+    }
+
+    /** "Try again" from the transcriber-warming notice: re-run transcription on the matched note. */
+    private fun retryTranscript() {
+        val cand = sessionMatch ?: return
+        AppLog.i("[orchestrator] retrying transcription of ${cand.name}.")
+        overlay.setCandidates(listOf(cand), true)
+        val gen = generation
+        transcribeExec.execute { resolveTranscriptAndSummary(cand, gen) }
+    }
+
+    /** "Listen again" from a no-match / matching error: re-arm a fresh capture session using the
+     *  last play-tap's context (chat, run), so the user just replays the note. */
+    private fun listenAgain() {
+        if (listening) { AppLog.i("[orchestrator] listen already active — ignoring Listen again."); return }
+        AppLog.i("[orchestrator] re-arming listen (user tapped Listen again).")
+        listening = true
+        cancelRequested = false
+        generation++
+        overlay.showSpinner("Ready. Play the note again.")
+        worker.execute { runListen() }
     }
 
     /** Runs on [transcribeExec]. [gen] guards a superseded session from repainting the new card. */

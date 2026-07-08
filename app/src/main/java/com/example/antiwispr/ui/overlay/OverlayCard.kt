@@ -119,6 +119,8 @@ fun TacitOverlayCard(
     onCommitCandidate: (Int) -> Unit = {},
     onNoneOfThese: () -> Unit = {},
     onWrongNote: () -> Unit = {},
+    onNoticeAction: (NoticeAction) -> Unit = {},
+    onListenAgain: () -> Unit = {},
     onExitFinished: () -> Unit,
 ) {
     val enterState = remember { MutableTransitionState(false) }
@@ -198,8 +200,8 @@ fun TacitOverlayCard(
                     OverlayPhase.TRANSCRIBING -> TranscribingBody(state)
                     OverlayPhase.TRANSCRIPT -> TranscriptBody(state, onCopy, onToggleChain, onRequestSummary, onEntityTap, onWrongNote)
                     OverlayPhase.CLOSE_MATCHES -> CloseMatchesBody(state, onCommitCandidate, onNoneOfThese)
-                    OverlayPhase.NO_MATCH -> NoMatchBody()
-                    OverlayPhase.NOTICE -> NoticeBody(state)
+                    OverlayPhase.NO_MATCH -> NoMatchBody(onListenAgain, onClose)
+                    OverlayPhase.NOTICE -> NoticeBody(state, onNoticeAction)
                 }
             }
         }
@@ -841,7 +843,7 @@ private fun CandidateRow(meta: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun NoMatchBody() {
+private fun NoMatchBody(onListenAgain: () -> Unit, onClose: () -> Unit) {
     Column {
         Text(
             "No confident match",
@@ -854,14 +856,53 @@ private fun NoMatchBody() {
             fontFamily = Inter, fontSize = 13.sp,
             color = OverlayPalette.inkMuted,
         )
+        Spacer(Modifier.height(14.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CardActionButton("Listen again", solid = true, onClick = onListenAgain)
+            CardActionButton("Close", solid = false, onClick = onClose)
+        }
     }
 }
 
 @Composable
-private fun NoticeBody(state: OverlayUiState) {
-    Text(
-        state.notice.orEmpty(),
-        fontFamily = Inter, fontSize = 13.sp,
-        color = OverlayPalette.inkMuted,
-    )
+private fun NoticeBody(state: OverlayUiState, onAction: (NoticeAction) -> Unit) {
+    Column {
+        Text(
+            state.notice.orEmpty(),
+            fontFamily = Inter, fontSize = 13.sp,
+            color = OverlayPalette.inkMuted,
+        )
+        val label = when (state.noticeAction) {
+            NoticeAction.FINISH_SETUP -> "Finish setup"
+            NoticeAction.TRY_AGAIN -> "Try again"
+            NoticeAction.SHARE_SCREEN -> "Share screen"
+            NoticeAction.LISTEN_AGAIN -> "Listen again"
+            NoticeAction.NONE -> null
+        }
+        if (label != null) {
+            Spacer(Modifier.height(14.dp))
+            CardActionButton(label, solid = true) { onAction(state.noticeAction) }
+        }
+    }
+}
+
+/** Compact in-card recovery button: solid amber primary, or amber-outline ghost. */
+@Composable
+private fun CardActionButton(label: String, solid: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .then(
+                if (solid) Modifier.background(OverlayPalette.accentDeep)
+                else Modifier.border(1.dp, OverlayPalette.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    ) {
+        Text(
+            label,
+            fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 12.sp,
+            color = if (solid) Color(0xFFFFF3E9) else OverlayPalette.accent,
+        )
+    }
 }

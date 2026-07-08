@@ -3,10 +3,12 @@ package com.example.antiwispr
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import androidx.compose.runtime.mutableStateOf
+import com.example.antiwispr.ui.overlay.NoticeAction
 import com.example.antiwispr.ui.overlay.OverlayComposeWindow
 import com.example.antiwispr.ui.overlay.OverlayPhase
 import com.example.antiwispr.ui.overlay.OverlayUiState
@@ -15,6 +17,7 @@ import com.example.antiwispr.ui.overlay.TacitOverlayCard
 import com.example.antiwispr.ui.overlay.TacitOverlayTheme
 import com.example.antiwispr.ui.overlay.humanizeNotice
 import com.example.antiwispr.ui.overlay.interpretStatus
+import com.example.antiwispr.ui.overlay.noticeActionFor
 import com.example.antiwispr.ui.overlay.toMatchInfo
 
 /**
@@ -47,6 +50,10 @@ class OverlayController(private val ctx: Context) {
     @Volatile var onCommitCandidate: ((Int) -> Unit)? = null
     /** Card's "None of these" ghost from the close-matches picker. */
     @Volatile var onNoneOfThese: (() -> Unit)? = null
+    /** Notice "Try again": retry transcription of the matched note in place. */
+    @Volatile var onTryAgain: (() -> Unit)? = null
+    /** No-match / matching-error "Listen again": re-arm a fresh capture session. */
+    @Volatile var onListenAgain: (() -> Unit)? = null
     /** True once the user dismissed the card; blocks a still-running listen from re-creating it. */
     @Volatile private var dismissed = false
     /** When a result is showing, ignore outside-touch dismissal (incl. our own pause-on-match click). */
@@ -196,7 +203,10 @@ class OverlayController(private val ctx: Context) {
         ensureWindow()
         state.value = when {
             text.startsWith("transcribing") -> state.value.copy(visible = true, phase = OverlayPhase.TRANSCRIBING)
-            text.startsWith("[") -> state.value.copy(visible = true, phase = OverlayPhase.NOTICE, notice = humanizeNotice(text))
+            text.startsWith("[") -> state.value.copy(
+                visible = true, phase = OverlayPhase.NOTICE,
+                notice = humanizeNotice(text), noticeAction = noticeActionFor(text),
+            )
             else -> state.value.copy(visible = true, phase = OverlayPhase.TRANSCRIPT, transcript = text, copied = false)
         }
     }
@@ -303,6 +313,16 @@ class OverlayController(private val ctx: Context) {
                         onCommitCandidate = { i -> onCommitCandidate?.invoke(i) },
                         onNoneOfThese = { onNoneOfThese?.invoke() },
                         onWrongNote = { showCandidatePicker() },
+                        onNoticeAction = { action ->
+                            when (action) {
+                                NoticeAction.FINISH_SETUP -> { launchApp(); dismiss() }
+                                NoticeAction.TRY_AGAIN -> onTryAgain?.invoke()
+                                NoticeAction.SHARE_SCREEN -> onShareAction?.invoke()
+                                NoticeAction.LISTEN_AGAIN -> onListenAgain?.invoke()
+                                NoticeAction.NONE -> {}
+                            }
+                        },
+                        onListenAgain = { onListenAgain?.invoke() },
                         // Launching an external app (Maps/dialer/calendar) must drop the card —
                         // the overlay window floats above whatever it just opened. In-place
                         // actions (amount copy) return false and keep it up.
@@ -332,8 +352,20 @@ class OverlayController(private val ctx: Context) {
     private fun copyText(text: String) {
         if (text.isBlank()) return
         ctx.getSystemService(ClipboardManager::class.java)
-            ?.setPrimaryClip(ClipData.newPlainText("Tacit note", text))
+            ?.setPrimaryClip(ClipData.newPlainText("TACIT note", text))
         state.value = state.value.copy(copied = true)
         main.postDelayed({ state.value = state.value.copy(copied = false) }, 1500)
+    }
+
+    /** Open TACIT (for the "Finish setup" notice action); the overlay dismisses after. */
+    private fun launchApp() {
+        try {
+            ctx.startActivity(
+                Intent(ctx, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            )
+        } catch (e: Exception) {
+            AppLog.w("[overlay] couldn't open TACIT: ${e.message}")
+        }
     }
 }
