@@ -10,6 +10,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.example.antiwispr.AppLog
 import com.example.antiwispr.MainActivity
+import com.example.antiwispr.R
 import com.example.antiwispr.StoredTranscript
 
 /**
@@ -52,9 +53,9 @@ object TranscriptNotifier {
             )
             val title = if (rec.chatName.isNotBlank()) "Transcript ready · ${rec.chatName}" else "Transcript ready"
             val n = NotificationCompat.Builder(ctx, CHANNEL_ID)
-                // System drawable, matching ProjectionService/MicCaptureService — an adaptive
-                // mipmap (ic_launcher) does not render as a notification status icon.
-                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                // Monochrome "T." monogram; the system tints it. (An adaptive mipmap does not
+                // render as a notification status icon.)
+                .setSmallIcon(R.drawable.ic_stat_tacit)
                 .setContentTitle(title)
                 .setContentText(rec.text.take(120))
                 .setStyle(NotificationCompat.BigTextStyle().bigText(rec.text.take(400)))

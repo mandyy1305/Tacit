@@ -42,8 +42,10 @@ class MainActivity : ComponentActivity() {
         handleDeepLink(intent)
     }
 
-    /** A "transcript ready" notification carries the note key; hand it to the VM for AppRoot to open. */
+    /** A "transcript ready" notification carries the note key; a launcher shortcut carries a
+     *  destination. Hand either to the VM for AppRoot to act on. */
     private fun handleDeepLink(intent: Intent?) {
         intent?.getStringExtra(TranscriptNotifier.EXTRA_NOTE_KEY)?.let { vm.pendingOpenKey = it }
+        intent?.getStringExtra("tacit.dest")?.let { vm.pendingDest = it }
     }
 }

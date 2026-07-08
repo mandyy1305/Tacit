@@ -101,6 +101,7 @@ fun SearchScreen(
     query: String,
     onQueryChange: (String) -> Unit,
     chainKeys: Set<String> = emptySet(),
+    initialAsk: Boolean = false,
     onBack: () -> Unit,
     onOpen: (StoredTranscript) -> Unit,
 ) {
@@ -108,7 +109,7 @@ fun SearchScreen(
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
-    var mode by rememberSaveable { mutableIntStateOf(0) } // 0 = Search, 1 = Ask
+    var mode by rememberSaveable { mutableIntStateOf(if (initialAsk) 1 else 0) } // 0 = Search, 1 = Ask
     var senderFilter by rememberSaveable { mutableStateOf<String?>(null) }
     var datePreset by rememberSaveable { mutableStateOf(DatePreset.ANY) }
     val filters = remember(senderFilter, datePreset) {

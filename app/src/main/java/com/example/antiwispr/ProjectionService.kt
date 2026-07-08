@@ -274,7 +274,7 @@ class ProjectionService : Service(), AudioWindowSource {
             .setContentText("TACIT hears WhatsApp playback directly for cleaner matches. Audio is matched and discarded.")
             .setStyle(Notification.BigTextStyle().bigText(
                 "TACIT hears WhatsApp playback directly for cleaner matches. Audio is matched and discarded."))
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setSmallIcon(R.drawable.ic_stat_tacit)
             .setOngoing(true)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setContentIntent(tap)

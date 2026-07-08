@@ -167,6 +167,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      *  AppRoot observes it, resolves the record, and navigates to that note's detail screen. */
     var pendingOpenKey by mutableStateOf<String?>(null)
 
+    /** Set by MainActivity from a launcher shortcut (search / ask / library); AppRoot navigates. */
+    var pendingDest by mutableStateOf<String?>(null)
+
+    /** Seeds the Search screen into Ask mode (set true by the Ask shortcut, cleared on plain open). */
+    var searchStartAsk: Boolean = false
+
     init {
         AppLog.i("=== TACIT — every voice note, read ===")
         val ctx = app.applicationContext

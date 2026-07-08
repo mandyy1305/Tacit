@@ -77,7 +77,7 @@ class MicCaptureService : Service() {
         val notif: Notification = Notification.Builder(this, TacitNotifications.CHANNEL_MIC)
             .setContentTitle("Listening through the mic")
             .setContentText("Only while this voice note plays. Nothing is stored.")
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setSmallIcon(R.drawable.ic_stat_tacit)
             .setOngoing(true)
             .addAction(
                 Notification.Action.Builder(

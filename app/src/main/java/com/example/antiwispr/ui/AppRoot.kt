@@ -159,6 +159,17 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
         vm.pendingOpenKey = null
     }
 
+    // Launcher shortcut (Search / Ask / Library) → jump to the destination.
+    val pendingDest = vm.pendingDest
+    LaunchedEffect(pendingDest) {
+        when (pendingDest) {
+            "search" -> { vm.searchStartAsk = false; nav.navigate("search") }
+            "ask" -> { vm.searchStartAsk = true; nav.navigate("search") }
+            "library" -> nav.navigate("library")
+        }
+        if (pendingDest != null) vm.pendingDest = null
+    }
+
     val start = remember {
         if (Toggles.onboardingDone || vm.setup.value.setupComplete) "home" else "onboarding"
     }
@@ -197,7 +208,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 chainKeys = chainKeys,
                 actions = actions,
                 onOpenSettings = { nav.navigate("settings") },
-                onOpenSearch = { nav.navigate("search") },
+                onOpenSearch = { vm.searchStartAsk = false; nav.navigate("search") },
                 onOpenLibrary = { nav.navigate("library") },
                 onOpenTranscript = { vm.selectedTranscript = it; nav.navigate("transcript") },
                 onFinishSetup = { nav.navigate("onboarding") },
@@ -209,7 +220,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 chainKeys = chainKeys,
                 onBack = { nav.popBackStack() },
                 onOpen = { vm.selectedTranscript = it; nav.navigate("transcript") },
-                onOpenSearch = { nav.navigate("search") },
+                onOpenSearch = { vm.searchStartAsk = false; nav.navigate("search") },
                 onDelete = { vm.softDelete(it) },
                 onUndoDelete = { vm.undoDelete() },
                 onCommitDelete = { vm.commitPendingDeletes() },
@@ -220,6 +231,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 query = vm.searchQuery,
                 onQueryChange = { vm.searchQuery = it },
                 chainKeys = chainKeys,
+                initialAsk = vm.searchStartAsk,
                 onBack = { nav.popBackStack() },
                 onOpen = { vm.selectedTranscript = it; nav.navigate("transcript") },
             )

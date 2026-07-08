@@ -3,4 +3,12 @@
     <string name="tagline">Every voice note, read.</string>
     <string name="accessibility_label">TACIT</string>
     <string name="accessibility_desc">TACIT reads the on-screen details of WhatsApp voice notes (the play control, length, time, and sender) to transcribe the note you play. It reads nothing else, and only inside WhatsApp.</string>
+
+    <!-- Launcher long-press shortcuts -->
+    <string name="shortcut_search_short">Search</string>
+    <string name="shortcut_search_long">Search your notes</string>
+    <string name="shortcut_ask_short">Ask</string>
+    <string name="shortcut_ask_long">Ask your notes</string>
+    <string name="shortcut_library_short">Library</string>
+    <string name="shortcut_library_long">Open your Library</string>
 </resources>
