@@ -467,6 +467,44 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
+    // ---- Library multi-select soft-delete (undo window owned by the snackbar) ------------------
+    // Records are removed from the local store immediately (they vanish from the list) but the
+    // cloud tombstone is deferred: Undo re-inserts them; dismissing the snackbar commits the
+    // tombstones. A new soft-delete or process teardown flushes any still-pending batch.
+    private var pendingDeletes: List<StoredTranscript> = emptyList()
+
+    fun softDelete(records: List<StoredTranscript>) {
+        if (records.isEmpty()) return
+        commitPendingDeletes() // flush any prior batch before starting a new one
+        val ctx = getApplication<Application>().applicationContext
+        val store = Transcripts.get(ctx)
+        records.forEach { store.remove(it.key); dropStaleChainGists(it) }
+        if (records.any { it.key == selectedTranscript?.key }) selectedTranscript = null
+        pendingDeletes = records
+        refresh()
+    }
+
+    fun undoDelete() {
+        if (pendingDeletes.isEmpty()) return
+        val ctx = getApplication<Application>().applicationContext
+        Transcripts.get(ctx).applyRemote(pendingDeletes, emptyList()) // re-insert (map[key] is gone → upsert)
+        pendingDeletes = emptyList()
+        refresh()
+    }
+
+    /** Turns the pending soft-deletes into real cloud tombstones. Called when the undo window ends. */
+    fun commitPendingDeletes() {
+        if (pendingDeletes.isEmpty()) return
+        val ctx = getApplication<Application>().applicationContext
+        pendingDeletes.forEach { SyncEngine.queueDeletion(ctx, it.key) }
+        pendingDeletes = emptyList()
+    }
+
+    override fun onCleared() {
+        commitPendingDeletes()
+        super.onCleared()
+    }
+
     /** A chain gist is built from its members' transcripts — when a member is deleted or
      *  re-transcribed, the cached gist no longer matches and must regenerate. */
     private fun dropStaleChainGists(t: StoredTranscript) {

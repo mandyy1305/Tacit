@@ -210,6 +210,9 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 onBack = { nav.popBackStack() },
                 onOpen = { vm.selectedTranscript = it; nav.navigate("transcript") },
                 onOpenSearch = { nav.navigate("search") },
+                onDelete = { vm.softDelete(it) },
+                onUndoDelete = { vm.undoDelete() },
+                onCommitDelete = { vm.commitPendingDeletes() },
             )
         }
         composable("search") {

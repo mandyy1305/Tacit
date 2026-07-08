@@ -39,6 +39,55 @@ fun durationLabel(seconds: Double): String? {
     return String.format(Locale.US, "%d:%02d", total / 60, total % 60)
 }
 
+private val FULL_MONTHS = arrayOf(
+    "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
+    "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"
+)
+private val WEEKDAYS = arrayOf( // Calendar.DAY_OF_WEEK: 1 = Sunday
+    "SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"
+)
+
+/** Start-of-day millis for a transcript's effective day: its WhatsApp send date when known
+ *  (yyyymmdd), else the day it was transcribed/synced. Used to group the Library under DayHeaders. */
+fun dayGroupKey(waDate: Int, updatedAt: Long): Long {
+    val c = Calendar.getInstance()
+    if (waDate > 0) {
+        val y = waDate / 10000; val m = (waDate / 100) % 100; val d = waDate % 100
+        if (m in 1..12 && d in 1..31) {
+            c.set(y, m - 1, d, 0, 0, 0); c.set(Calendar.MILLISECOND, 0)
+            return c.timeInMillis
+        }
+    }
+    c.timeInMillis = updatedAt
+    c.set(Calendar.HOUR_OF_DAY, 0); c.set(Calendar.MINUTE, 0)
+    c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0)
+    return c.timeInMillis
+}
+
+/** Sticky Library day header: "TODAY", "YESTERDAY", a weekday for the last week, else "28 JUNE"
+ *  ("28 JUNE 2025" when not this year). India-first, so no DST off-by-one to worry about. */
+fun dayHeaderLabel(dayEpoch: Long): String {
+    val now = Calendar.getInstance()
+    val todayStart = (now.clone() as Calendar).apply {
+        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+    }
+    val diffDays = ((todayStart.timeInMillis - dayEpoch) / 86_400_000L).toInt()
+    return when {
+        diffDays <= 0 -> "TODAY"
+        diffDays == 1 -> "YESTERDAY"
+        diffDays in 2..6 -> {
+            val c = Calendar.getInstance().apply { timeInMillis = dayEpoch }
+            WEEKDAYS[c.get(Calendar.DAY_OF_WEEK) - 1]
+        }
+        else -> {
+            val c = Calendar.getInstance().apply { timeInMillis = dayEpoch }
+            val d = c.get(Calendar.DAY_OF_MONTH); val m = c.get(Calendar.MONTH); val y = c.get(Calendar.YEAR)
+            if (y == now.get(Calendar.YEAR)) "$d ${FULL_MONTHS[m]}" else "$d ${FULL_MONTHS[m]} $y"
+        }
+    }
+}
+
 /**
  * Merged, sorted surface-form match ranges for all [terms] (case-insensitive). Merging
  * matters: terms can overlap ("ghar" + "har") and nested/overlapping spans would break
