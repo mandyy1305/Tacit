@@ -29,6 +29,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -69,8 +71,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -148,8 +152,27 @@ fun TacitOverlayCard(
     ) {
         val corner = RoundedCornerShape(20.dp)
         val maxCardHeight = (LocalConfiguration.current.screenHeightDp * 0.6f).dp
+        // Swipe-up to dismiss: the gesture translates + fades the CARD CONTENT; the window itself
+        // never moves or resizes (the frozen-window rule). Armed from the pinned header so it never
+        // fights the scrollable content pane.
+        var dragY by remember { mutableFloatStateOf(0f) }
+        val dismissPx = with(LocalDensity.current) { 56.dp.toPx() }
+        val dragModifier = Modifier.pointerInput(Unit) {
+            detectVerticalDragGestures(
+                onVerticalDrag = { change, delta ->
+                    change.consume()
+                    dragY = (dragY + delta).coerceIn(-1000f, 40f) // up freely; slight rubber-band down
+                },
+                onDragEnd = { if (dragY < -dismissPx) onClose() else dragY = 0f },
+                onDragCancel = { dragY = 0f },
+            )
+        }
         Column(
             Modifier
+                .graphicsLayer {
+                    translationY = dragY
+                    alpha = (1f + dragY / (dismissPx * 3f)).coerceIn(0f, 1f)
+                }
                 .fillMaxWidth()
                 .heightIn(max = maxCardHeight)
                 .shadow(12.dp, corner, ambientColor = Color.Black, spotColor = Color.Black)
@@ -166,7 +189,7 @@ fun TacitOverlayCard(
                 .border(1.dp, OverlayPalette.hairline, corner)
                 .padding(18.dp)
         ) {
-            Header(onClose)
+            Header(onClose, dragModifier)
 
             // Fade only — expand/shrink would animate layout height and resize the window
             // per frame (same stutter as above).
@@ -211,8 +234,8 @@ fun TacitOverlayCard(
 // ---- pieces ---------------------------------------------------------------------
 
 @Composable
-private fun Header(onClose: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+private fun Header(onClose: () -> Unit, dragModifier: Modifier = Modifier) {
+    Row(dragModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(
                 "TACIT",
