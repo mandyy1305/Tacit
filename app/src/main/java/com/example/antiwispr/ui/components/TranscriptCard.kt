@@ -25,15 +25,16 @@ import com.example.antiwispr.StoredTranscript
 import com.example.antiwispr.ui.theme.Dimens
 
 /**
- * One transcript in a list: sent-date + freshness up top, a 3-line snippet below.
- * Search matches are highlighted in the accent color when [query] is set.
- * NOTE: durationSec in the store is always -1; deliberately never rendered.
+ * One transcript in a list: sent-date, chat, duration + freshness up top, a 3-line snippet below.
+ * Search matches are highlighted in the accent color when [query] is set. Duration renders once a
+ * note has been (re-)transcribed since the pipeline started persisting it (legacy records show none).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TranscriptCard(
     transcript: StoredTranscript,
     query: String? = null,
+    hint: String? = null,
     chained: Boolean = false,
     onClick: () -> Unit = {},
     onLongPress: (() -> Unit)? = null,
@@ -56,6 +57,7 @@ fun TranscriptCard(
                     buildString {
                         append(waDateLabel(transcript.waDate) ?: "Voice note")
                         if (transcript.chatName.isNotEmpty()) append("  ·  ${transcript.chatName}")
+                        if (transcript.durationSec > 0) durationLabel(transcript.durationSec)?.let { append("  ·  $it") }
                     },
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.labelMedium,
@@ -87,6 +89,21 @@ fun TranscriptCard(
                     relativeTime(transcript.updatedAt),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (hint != null) {
+                // Explains a match the snippet can't highlight (cross-script / summary / chat name).
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    hint,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Spacer(Modifier.height(8.dp))

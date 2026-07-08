@@ -72,7 +72,17 @@ data class SearchFilters(
     }
 }
 
-data class SearchHit(val transcript: StoredTranscript, val score: Int)
+/**
+ * [surfaceInText] = a raw query term appears literally in the note text, so the card can highlight
+ * it. When false, [hint] explains where/what matched ("match: घर" for a cross-script hit,
+ * "found in summary", "found in chat name") so the result never reads as a false positive.
+ */
+data class SearchHit(
+    val transcript: StoredTranscript,
+    val score: Int,
+    val surfaceInText: Boolean = true,
+    val hint: String? = null,
+)
 
 object SearchEngine {
 
@@ -97,6 +107,7 @@ object SearchEngine {
         limit: Int = 100,
         requireAll: Boolean = true,
     ): List<SearchHit> {
+        val rawTerms = tokenize(query) // un-normalized: for literal surface-highlight detection
         val terms = tokenize(query).map { TextFolder.normalize(it) }.filter { it.isNotEmpty() }.distinct()
         if (terms.isEmpty()) return emptyList()
         data class Scored(val hit: SearchHit, val matched: Int)
@@ -115,7 +126,11 @@ object SearchEngine {
                 score += s
             }
             val ok = if (requireAll) matched == terms.size else matched > 0
-            if (ok) out += Scored(SearchHit(t, score), matched)
+            if (ok) {
+                val surface = rawTerms.any { t.text.contains(it, ignoreCase = true) }
+                val hint = if (surface) null else matchHint(t, n, terms)
+                out += Scored(SearchHit(t, score, surface, hint), matched)
+            }
         }
         pruneCache(records)
         val cmp = if (requireAll) {
@@ -168,6 +183,20 @@ object SearchEngine {
         if (cache.size <= records.size + 64) return
         val live = records.mapTo(HashSet()) { it.key }
         cache.keys.retainAll(live)
+    }
+
+    /** Chip text for a hit the card can't surface-highlight: the actual cross-script word that
+     *  matched, else which field carried the match. Runs only for non-surface hits (the minority). */
+    private fun matchHint(t: StoredTranscript, n: Norm, terms: List<String>): String? {
+        if (terms.any { n.text.contains(it) }) {
+            val word = t.text.split(TOKEN_SPLIT).firstOrNull { w ->
+                w.isNotBlank() && terms.any { TextFolder.normalize(w).contains(it) }
+            }
+            if (!word.isNullOrBlank()) return "match: $word"
+        }
+        if (terms.any { n.summary.contains(it) }) return "found in summary"
+        if (terms.any { n.chatName.contains(it) }) return "found in chat name"
+        return null
     }
 
     /** Optional warm-up so the first search doesn't pay the transliteration cost. */

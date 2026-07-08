@@ -308,6 +308,7 @@ private fun SearchResults(
                         TranscriptCard(
                             hit.transcript,
                             query = trimmed,
+                            hint = hit.hint,
                             chained = hit.transcript.key in chainKeys,
                             onClick = { onOpen(hit.transcript) },
                             onLongPress = { onCopy(hit.transcript.text) },

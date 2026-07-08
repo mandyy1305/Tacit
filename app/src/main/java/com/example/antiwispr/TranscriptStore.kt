@@ -110,13 +110,18 @@ object Transcripts {
         save()
     }
 
-    @Synchronized fun put(f: File, text: String, chatName: String = "", keepSummary: Boolean = true, source: String = "") {
+    @Synchronized fun put(
+        f: File, text: String, chatName: String = "", keepSummary: Boolean = true,
+        source: String = "", durationSec: Double = -1.0,
+    ) {
         val p = VoiceNotes.parseWhatsAppName(f.name)
         val existing = map[keyFor(f)]
         map[keyFor(f)] = StoredTranscript(
             key = keyFor(f), path = f.absolutePath, name = f.name,
             waDate = p?.dateYmd ?: -1, seq = p?.seq ?: -1,
-            durationSec = -1.0, text = text, updatedAt = System.currentTimeMillis(),
+            // Only overwrite duration with a freshly-measured value; keep the known one on re-stamps.
+            durationSec = if (durationSec >= 0) durationSec else existing?.durationSec ?: -1.0,
+            text = text, updatedAt = System.currentTimeMillis(),
             summary = if (keepSummary) existing?.summary ?: "" else "", // re-transcribe voids it
             chatName = chatName.ifEmpty { existing?.chatName ?: "" }, // never downgrade a known chat
             source = source.ifEmpty { existing?.source ?: "" }, // keep the known engine on re-stamps

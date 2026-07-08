@@ -34,10 +34,12 @@ object TranscribeRouter {
 
         if (!transcript.startsWith("[")) {
             // A forced re-transcription replaces the text, so the old summary is stale — drop it
-            // (it regenerates lazily on the next Summary-tab open).
+            // (it regenerates lazily on the next Summary-tab open). Measure duration once here so
+            // cards and the reader can show "0:42" (persisted; -1 falls back to unknown).
             Transcripts.get(ctx).put(
                 file, transcript, chatName.orEmpty(), keepSummary = !force,
                 source = if (cloudText != null) "cloud" else "local",
+                durationSec = VoiceNotes.readDurationSec(file),
             )
             SyncEngine.requestSync(ctx)
         }
