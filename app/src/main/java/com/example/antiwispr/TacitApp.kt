@@ -14,5 +14,6 @@ class TacitApp : Application() {
     override fun onCreate() {
         super.onCreate()
         FirebaseBootstrap.ensureInitialized(this)
+        TacitNotifications.ensureChannels(this)
     }
 }

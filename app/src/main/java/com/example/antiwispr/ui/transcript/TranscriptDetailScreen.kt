@@ -152,7 +152,7 @@ fun TranscriptDetailScreen(
     var wholeChain by rememberSaveable(transcript.key) { mutableStateOf(false) }
     val chainTranscript = remember(chain?.id, chainEdits) {
         chainMembers.mapIndexed { i, (_, rec) ->
-            "[Note ${i + 1}]\n" + (rec?.text?.ifBlank { null } ?: "[not transcribed yet — tap “Transcribe all”]")
+            "[Note ${i + 1}]\n" + (rec?.text?.ifBlank { null } ?: "[not transcribed yet, tap Transcribe all]")
         }.joinToString("\n\n")
     }
     var chainRaw by remember(transcript.key, chainEdits) {
@@ -243,23 +243,42 @@ fun TranscriptDetailScreen(
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = Dimens.screenPad)
             ) {
+                // Title is the chat name — people remember who, not which date.
                 Text(
-                    waDateLabel(transcript.waDate) ?: "Voice note",
+                    transcript.chatName.ifBlank { "Voice note" },
                     style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
                 Spacer(Modifier.height(6.dp))
+                // Meta line 1: date · duration (duration renders once the pipeline persists it).
+                val dateLabel = waDateLabel(transcript.waDate)
+                val durLabel = if (transcript.durationSec > 0) durationLabel(transcript.durationSec) else null
                 Text(
-                    buildString {
-                        append("Transcribed ${relativeTime(transcript.updatedAt).lowercase()}")
-                        if (transcript.chatName.isNotEmpty()) append("  ·  ${transcript.chatName}")
-                    },
-                    style = MaterialTheme.typography.bodySmall,
+                    listOfNotNull(dateLabel, durLabel).joinToString("  ·  ").ifBlank { "Voice note" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                // Meta line 2: provenance, source-aware.
+                val engine = when (transcript.source) {
+                    "cloud" -> " with TACIT Cloud"
+                    "local" -> " on this phone"
+                    else -> ""
+                }
+                Text(
+                    "Transcribed ${relativeTime(transcript.updatedAt).lowercase()}$engine",
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (audioAvailable) {
                     Spacer(Modifier.height(12.dp))
                     AudioPlayerRow(transcript.path, transcript.key)
+                } else {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "This note's audio isn't on this phone. The words are saved.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
                 }
                 if (chain != null) {
                     Spacer(Modifier.height(14.dp))
@@ -351,7 +370,7 @@ fun TranscriptDetailScreen(
                     if (copied) "Copied ✓" else "Copy",
                     onClick = {
                         context.getSystemService(ClipboardManager::class.java)
-                            ?.setPrimaryClip(ClipData.newPlainText("Tacit note", activeText))
+                            ?.setPrimaryClip(ClipData.newPlainText("TACIT note", activeText))
                         copied = true
                     },
                     modifier = Modifier.weight(1f),
@@ -371,11 +390,10 @@ fun TranscriptDetailScreen(
     if (confirmRetranscribe) {
         AlertDialog(
             onDismissRequest = { confirmRetranscribe = false },
-            title = { Text("Re-transcribe this note?", style = MaterialTheme.typography.headlineSmall) },
+            title = { Text("Transcribe this note again?", style = MaterialTheme.typography.headlineSmall) },
             text = {
                 Text(
-                    "Replaces the saved transcript and summary using your current " +
-                        "transcription settings.",
+                    "The saved words and summary are replaced using your current settings.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -402,8 +420,8 @@ fun TranscriptDetailScreen(
             title = { Text("Delete transcript?", style = MaterialTheme.typography.headlineSmall) },
             text = {
                 Text(
-                    "The saved text is removed. The voice note itself is untouched — " +
-                        "play it again in WhatsApp and TACIT transcribes it fresh.",
+                    "The saved text is removed. The voice note itself is untouched. " +
+                        "Play it again in WhatsApp and TACIT transcribes it fresh.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -672,8 +690,7 @@ private fun SummaryTab(
         }
         !llmReady -> Column {
             Text(
-                "Summaries turn each note into a short brief with action items — " +
-                    "on this phone, or via your cloud account.",
+                "Summaries turn each note into a short brief with action items.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -786,7 +803,14 @@ private fun AudioPlayerRow(path: String, key: String) {
         }
     }
 
-    if (failed) return
+    if (failed) {
+        Text(
+            "Couldn't play this audio.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        return
+    }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier

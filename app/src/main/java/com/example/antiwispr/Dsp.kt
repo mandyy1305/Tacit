@@ -8,7 +8,7 @@ import kotlin.math.sqrt
 
 /**
  * Pure-Kotlin DSP: radix-2 FFT + log-mel spectrogram + per-band normalization.
- * No external dependencies on purpose (this is a throwaway feasibility harness).
+ * No external dependencies on purpose.
  */
 
 /** Iterative in-place radix-2 Cooley-Tukey FFT. size must be a power of two. */

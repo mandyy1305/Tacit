@@ -56,6 +56,11 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
     @Volatile private var sessionRun: VoiceRun? = null
     /** The matched note file for the current session (summary-state restores on chain toggle-off). */
     @Volatile private var sessionFile: File? = null
+    /** Ranked candidates surfaced to the card (close-matches picker / "Wrong note?"); index-aligned
+     *  with the rows so a tapped row commits the right file. */
+    @Volatile private var sessionCandidates: List<CandidateFile> = emptyList()
+    /** The committed match for the current session (target of the "Try again" notice retry). */
+    @Volatile private var sessionMatch: CandidateFile? = null
     /** Card's "Transcribe all N" toggle — Summary tab yields the chain gist while true. */
     @Volatile private var chainModeEnabled = false
     /** Armed when the transcript is summarizable but nothing is cached — the Summary tab's
@@ -81,6 +86,10 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         overlay.onDismiss = { cancel("overlay dismissed"); generation++; pendingCloud = null }
         overlay.onToggleChain = { on -> onChainModeToggled(on) }
         overlay.onRequestSummary = { requestNoteSummary() }
+        overlay.onCommitCandidate = { i -> commitCandidate(i) }
+        overlay.onNoneOfThese = { overlay.showNoMatch() }
+        overlay.onTryAgain = { retryTranscript() }
+        overlay.onListenAgain = { listenAgain() }
     }
 
     /** Abort an in-progress listen (called on pause, overlay-dismiss, etc.). Interrupts the worker so
@@ -191,7 +200,7 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
                         // interruption point). Without this check we'd auto-pause WhatsApp and
                         // transcribe into a dismissed card — full pipeline, invisible overlay.
                         if (cancelRequested) break
-                        finalizeMatch(top, elapsed)
+                        finalizeMatch(top, ranked, elapsed)
                         return
                     }
                 } else {
@@ -200,8 +209,11 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
 
                 if (elapsed >= MAX_LISTEN) {
                     AppLog.w("[orchestrator] MAX_LISTEN ${MAX_LISTEN}s reached — no confident match.")
-                    overlay.setCandidates(ranked.take(6).map { toCandidate(it) }, false)
-                    overlay.setTranscript("[no confident match after %.0fs]".format(elapsed))
+                    // Surface the close matches so the user can pick (state H); no bare no-match
+                    // notice. Read duration only for the (up to 3) rows that render.
+                    val cands = ranked.take(6).mapIndexed { idx, s -> toCandidate(s, withDuration = idx < 3) }
+                    sessionCandidates = cands
+                    overlay.setCandidates(cands, false)
                     return
                 }
             }
@@ -240,10 +252,14 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         }
     }
 
-    private fun finalizeMatch(top: Scored, elapsed: Double) {
+    private fun finalizeMatch(top: Scored, ranked: List<Scored>, elapsed: Double) {
         AppLog.i("[orchestrator] ✅ CONFIDENT after %.1fs: ${top.name} aligned=${top.aligned} -> transcribe.".format(elapsed))
         val cand = toCandidate(top, withDuration = true)
-        overlay.setCandidates(listOf(cand), true) // show result + mark card sticky BEFORE the pause click
+        // Keep a few runner-ups so a confident-but-wrong match still has recourse ("Wrong note?").
+        val alts = ranked.take(4).mapIndexed { idx, s -> toCandidate(s, withDuration = idx < 3) }
+        sessionCandidates = alts
+        sessionMatch = cand
+        overlay.setCandidates(alts, true) // show result (first = top) + mark card sticky BEFORE the pause click
         if (Toggles.pauseOnMatch && !cancelRequested) {
             AppLog.i("[orchestrator] match confirmed — pausing WhatsApp playback.")
             onMatchPause?.invoke() // pause click lands outside the overlay; sticky keeps the card up
@@ -254,6 +270,40 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         // session immediately instead of being silently ignored for the whole Whisper pass.
         val gen = generation
         transcribeExec.execute { resolveTranscriptAndSummary(cand, gen) }
+    }
+
+    /** User picked an alternate from the close-matches / "Wrong note?" picker. Commit it as the
+     *  match and transcribe it via the normal path (same session as the play-tap). */
+    private fun commitCandidate(index: Int) {
+        val picked = sessionCandidates.getOrNull(index) ?: return
+        val cand = if (picked.durationSec < 0) picked.copy(durationSec = readDurationSec(picked.file)) else picked
+        AppLog.i("[orchestrator] user committed candidate #$index: ${cand.name}")
+        sessionMatch = cand
+        overlay.setCandidates(listOf(cand), true) // → MATCHED with the chosen note (keeps card sticky)
+        if (Toggles.pauseOnMatch) onMatchPause?.invoke()
+        val gen = generation
+        transcribeExec.execute { resolveTranscriptAndSummary(cand, gen) }
+    }
+
+    /** "Try again" from the transcriber-warming notice: re-run transcription on the matched note. */
+    private fun retryTranscript() {
+        val cand = sessionMatch ?: return
+        AppLog.i("[orchestrator] retrying transcription of ${cand.name}.")
+        overlay.setCandidates(listOf(cand), true)
+        val gen = generation
+        transcribeExec.execute { resolveTranscriptAndSummary(cand, gen) }
+    }
+
+    /** "Listen again" from a no-match / matching error: re-arm a fresh capture session using the
+     *  last play-tap's context (chat, run), so the user just replays the note. */
+    private fun listenAgain() {
+        if (listening) { AppLog.i("[orchestrator] listen already active — ignoring Listen again."); return }
+        AppLog.i("[orchestrator] re-arming listen (user tapped Listen again).")
+        listening = true
+        cancelRequested = false
+        generation++
+        overlay.showSpinner("Ready. Play the note again.")
+        worker.execute { runListen() }
     }
 
     /** Runs on [transcribeExec]. [gen] guards a superseded session from repainting the new card. */
@@ -269,7 +319,13 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
             return
         }
 
-        if (live()) overlay.setTranscript("transcribing…") // real ASR takes a few seconds (+ one-time model load)
+        if (live()) {
+            // Provenance caption reflects the engine that WILL run (updated to the actual source
+            // once the transcript lands in applyTranscript).
+            val willUseCloud = CloudClient.ready(appContext) && CloudPrefs.cloudTranscription(appContext)
+            overlay.setSource(if (willUseCloud) "cloud" else "local")
+            overlay.setTranscript("transcribing…") // real ASR takes a few seconds (+ one-time model load)
+        }
 
         // Long notes exceed Sarvam's 30s synchronous cap, so hand them to the async batch
         // API: the card stays on its spinner and the transcript arrives via FCM
@@ -323,6 +379,9 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
                 else -> overlay.setSummaryUnavailable()
             }
         }
+        // Reflect the actual engine that produced this transcript (from the cached record).
+        Transcripts.get(appContext).entry(file)?.source?.takeIf { it.isNotEmpty() }
+            ?.let { overlay.setSource(it) }
         overlay.setTranscript(transcript)
 
         // Chain detection: does this note belong to a burst? Membership comes from the chat run

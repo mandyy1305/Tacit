@@ -1,13 +1,15 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   Auto Backup rules (API 30). Device-to-device migration and cloud backup should carry a
+   user's library and preferences, but never auth tokens, the rebuildable sound-signature
+   index, or the multi-hundred-MB model packs. Using <include> only, so anything not listed
+   (fpindex.bin, whisper/, llm/, Firebase auth files) is excluded by default.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <include domain="file" path="transcripts.bin" />
+    <include domain="file" path="chains.bin" />
+    <include domain="file" path="chainoverrides.bin" />
+    <include domain="file" path="chainmembers.bin" />
+    <include domain="sharedpref" path="tacit_toggles.xml" />
+    <include domain="sharedpref" path="tacit_cloud.xml" />
 </full-backup-content>

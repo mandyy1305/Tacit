@@ -6,12 +6,11 @@ import android.util.Log
 
 /**
  * Central logging used by EVERY component (activity, services, overlay). Writes to logcat
- * (tag "Antiwispr") AND mirrors each line to an in-memory ring buffer + an optional UI
- * listener so MainActivity can show the same stream on screen. This is the "heavy logging
- * at every step" backbone for the feasibility skeleton.
+ * (tag "TACIT") AND mirrors each line to an in-memory ring buffer + an optional UI listener
+ * so the developer log viewer can show the same stream on screen.
  */
 object AppLog {
-    const val TAG = "Antiwispr"
+    const val TAG = "TACIT"
     private const val MAX_LINES = 3000
 
     private val lines = ArrayDeque<String>()

@@ -42,6 +42,9 @@ android {
     }
     buildFeatures {
         compose = true
+        // BuildConfig.DEBUG gates release-only behaviour (e.g. diagnostic tree dumping off in
+        // release, per the accessibility disclosure).
+        buildConfig = true
     }
 }
 

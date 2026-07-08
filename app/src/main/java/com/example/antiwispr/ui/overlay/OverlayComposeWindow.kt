@@ -166,7 +166,11 @@ class OverlayComposeWindow(
         val base = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
         return if (touchable) {
-            base or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+            // No FLAG_WATCH_OUTSIDE_TOUCH by design: a stray tap while scrolling WhatsApp must not
+            // kill a listen the user explicitly started. FLAG_NOT_FOCUSABLE already implies
+            // NOT_TOUCH_MODAL, so touches outside the card still pass straight through to WhatsApp;
+            // the card now closes only via the close button, a swipe-up, or pausing the note.
+            base
         } else {
             base or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         }

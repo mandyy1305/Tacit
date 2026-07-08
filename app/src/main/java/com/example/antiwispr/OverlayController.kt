@@ -3,10 +3,12 @@ package com.example.antiwispr
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import androidx.compose.runtime.mutableStateOf
+import com.example.antiwispr.ui.overlay.NoticeAction
 import com.example.antiwispr.ui.overlay.OverlayComposeWindow
 import com.example.antiwispr.ui.overlay.OverlayPhase
 import com.example.antiwispr.ui.overlay.OverlayUiState
@@ -15,6 +17,7 @@ import com.example.antiwispr.ui.overlay.TacitOverlayCard
 import com.example.antiwispr.ui.overlay.TacitOverlayTheme
 import com.example.antiwispr.ui.overlay.humanizeNotice
 import com.example.antiwispr.ui.overlay.interpretStatus
+import com.example.antiwispr.ui.overlay.noticeActionFor
 import com.example.antiwispr.ui.overlay.toMatchInfo
 
 /**
@@ -43,6 +46,14 @@ class OverlayController(private val ctx: Context) {
     @Volatile var onToggleChain: ((Boolean) -> Unit)? = null
     /** Invoked when the user opens the Summary tab and no summary exists yet (lazy generation). */
     @Volatile var onRequestSummary: (() -> Unit)? = null
+    /** Card's candidate picker: commit the tapped alternate as the match (index into candidates). */
+    @Volatile var onCommitCandidate: ((Int) -> Unit)? = null
+    /** Card's "None of these" ghost from the close-matches picker. */
+    @Volatile var onNoneOfThese: (() -> Unit)? = null
+    /** Notice "Try again": retry transcription of the matched note in place. */
+    @Volatile var onTryAgain: (() -> Unit)? = null
+    /** No-match / matching-error "Listen again": re-arm a fresh capture session. */
+    @Volatile var onListenAgain: (() -> Unit)? = null
     /** True once the user dismissed the card; blocks a still-running listen from re-creating it. */
     @Volatile private var dismissed = false
     /** When a result is showing, ignore outside-touch dismissal (incl. our own pause-on-match click). */
@@ -151,12 +162,40 @@ class OverlayController(private val ctx: Context) {
         onMain {
             if (dropUpdate("match result")) return@onMain
             ensureWindow() // a result must never land on a missing window — recreate if needed
+            val infos = candidates.map { it.toMatchInfo() }
             state.value = state.value.copy(
                 visible = true,
-                phase = if (confident) OverlayPhase.MATCHED else OverlayPhase.NO_MATCH,
-                match = candidates.firstOrNull()?.toMatchInfo(),
+                phase = when {
+                    confident -> OverlayPhase.MATCHED
+                    infos.size >= 2 -> OverlayPhase.CLOSE_MATCHES // low-confidence: let the user pick
+                    else -> OverlayPhase.NO_MATCH
+                },
+                match = infos.firstOrNull(),
+                candidates = infos,
             )
         }
+    }
+
+    /** Re-open the close-matches picker from a confident result ("Wrong note?"); only when the
+     *  session actually carried alternates. */
+    fun showCandidatePicker() = onMain {
+        if (dropUpdate("candidate picker")) return@onMain
+        if (state.value.candidates.size >= 2) {
+            state.value = state.value.copy(phase = OverlayPhase.CLOSE_MATCHES)
+        }
+    }
+
+    /** Collapse the picker to the plain no-match state ("None of these"). */
+    fun showNoMatch() = onMain {
+        if (dropUpdate("no match")) return@onMain
+        state.value = state.value.copy(phase = OverlayPhase.NO_MATCH)
+    }
+
+    /** Provenance of the current result / engine in flight: "local" (on-device) or "cloud". Drives
+     *  the SourceMark and the transcribing/summarizing captions. Additive to the frozen API. */
+    fun setSource(source: String) = onMain {
+        if (dropUpdate("source")) return@onMain
+        state.value = state.value.copy(source = source)
     }
 
     fun setTranscript(text: String) = onMain {
@@ -164,7 +203,10 @@ class OverlayController(private val ctx: Context) {
         ensureWindow()
         state.value = when {
             text.startsWith("transcribing") -> state.value.copy(visible = true, phase = OverlayPhase.TRANSCRIBING)
-            text.startsWith("[") -> state.value.copy(visible = true, phase = OverlayPhase.NOTICE, notice = humanizeNotice(text))
+            text.startsWith("[") -> state.value.copy(
+                visible = true, phase = OverlayPhase.NOTICE,
+                notice = humanizeNotice(text), noticeAction = noticeActionFor(text),
+            )
             else -> state.value.copy(visible = true, phase = OverlayPhase.TRANSCRIPT, transcript = text, copied = false)
         }
     }
@@ -268,6 +310,19 @@ class OverlayController(private val ctx: Context) {
                         onCopy = { text -> copyText(text) },
                         onToggleChain = { on -> onToggleChain?.invoke(on) },
                         onRequestSummary = { onRequestSummary?.invoke() },
+                        onCommitCandidate = { i -> onCommitCandidate?.invoke(i) },
+                        onNoneOfThese = { onNoneOfThese?.invoke() },
+                        onWrongNote = { showCandidatePicker() },
+                        onNoticeAction = { action ->
+                            when (action) {
+                                NoticeAction.FINISH_SETUP -> { launchApp(); dismiss() }
+                                NoticeAction.TRY_AGAIN -> onTryAgain?.invoke()
+                                NoticeAction.SHARE_SCREEN -> onShareAction?.invoke()
+                                NoticeAction.LISTEN_AGAIN -> onListenAgain?.invoke()
+                                NoticeAction.NONE -> {}
+                            }
+                        },
+                        onListenAgain = { onListenAgain?.invoke() },
                         // Launching an external app (Maps/dialer/calendar) must drop the card —
                         // the overlay window floats above whatever it just opened. In-place
                         // actions (amount copy) return false and keep it up.
@@ -297,8 +352,20 @@ class OverlayController(private val ctx: Context) {
     private fun copyText(text: String) {
         if (text.isBlank()) return
         ctx.getSystemService(ClipboardManager::class.java)
-            ?.setPrimaryClip(ClipData.newPlainText("Tacit note", text))
+            ?.setPrimaryClip(ClipData.newPlainText("TACIT note", text))
         state.value = state.value.copy(copied = true)
         main.postDelayed({ state.value = state.value.copy(copied = false) }, 1500)
+    }
+
+    /** Open TACIT (for the "Finish setup" notice action); the overlay dismisses after. */
+    private fun launchApp() {
+        try {
+            ctx.startActivity(
+                Intent(ctx, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            )
+        } catch (e: Exception) {
+            AppLog.w("[overlay] couldn't open TACIT: ${e.message}")
+        }
     }
 }

@@ -22,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -32,9 +33,12 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.antiwispr.AppLog
 import com.example.antiwispr.ProjectionService
+import com.example.antiwispr.Toggles
 import com.example.antiwispr.Transcripts
-import com.example.antiwispr.ui.history.HistoryScreen
+import com.example.antiwispr.cloud.CloudAuth
+import kotlinx.coroutines.launch
 import com.example.antiwispr.ui.home.HomeScreen
+import com.example.antiwispr.ui.library.LibraryScreen
 import com.example.antiwispr.ui.onboarding.OnboardingScreen
 import com.example.antiwispr.ui.search.SearchScreen
 import com.example.antiwispr.ui.settings.LogScreen
@@ -53,11 +57,14 @@ class SetupActions(
     val buildIndex: () -> Unit,
     val startSession: () -> Unit,
     val stopSession: () -> Unit,
+    val turnOn: () -> Unit,
+    val signIn: () -> Unit,
 )
 
 @Composable
 fun AppRoot(vm: AppViewModel = viewModel()) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val setup by vm.setup.collectAsStateWithLifecycle()
     val recents by vm.recents.collectAsStateWithLifecycle()
     val history by vm.history.collectAsStateWithLifecycle()
@@ -135,6 +142,14 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 }
             },
             stopSession = { vm.stopSession() },
+            turnOn = { vm.setTacitEnabled(true) },
+            signIn = {
+                scope.launch {
+                    CloudAuth.signIn(context)
+                        .onSuccess { vm.onSignedIn() }
+                        .onFailure { AppLog.w("[onboarding] sign-in failed: ${it.message}") }
+                }
+            },
         )
     }
 
@@ -156,7 +171,20 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
         vm.pendingOpenKey = null
     }
 
-    val start = remember { if (vm.setup.value.setupComplete) "home" else "onboarding" }
+    // Launcher shortcut (Search / Ask / Library) → jump to the destination.
+    val pendingDest = vm.pendingDest
+    LaunchedEffect(pendingDest) {
+        when (pendingDest) {
+            "search" -> { vm.searchStartAsk = false; nav.navigate("search") }
+            "ask" -> { vm.searchStartAsk = true; nav.navigate("search") }
+            "library" -> nav.navigate("library")
+        }
+        if (pendingDest != null) vm.pendingDest = null
+    }
+
+    val start = remember {
+        if (Toggles.onboardingDone || vm.setup.value.setupComplete) "home" else "onboarding"
+    }
 
     NavHost(
         navController = nav,
@@ -179,7 +207,10 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
             OnboardingScreen(
                 setup = setup,
                 actions = actions,
-                onFinished = { nav.navigate("home") { popUpTo(0) { inclusive = true } } },
+                onFinished = {
+                    vm.markOnboardingDone()
+                    nav.navigate("home") { popUpTo(0) { inclusive = true } }
+                },
             )
         }
         composable("home") {
@@ -189,18 +220,22 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 chainKeys = chainKeys,
                 actions = actions,
                 onOpenSettings = { nav.navigate("settings") },
-                onOpenSearch = { nav.navigate("search") },
-                onOpenHistory = { nav.navigate("history") },
+                onOpenSearch = { vm.searchStartAsk = false; nav.navigate("search") },
+                onOpenLibrary = { nav.navigate("library") },
                 onOpenTranscript = { vm.selectedTranscript = it; nav.navigate("transcript") },
                 onFinishSetup = { nav.navigate("onboarding") },
             )
         }
-        composable("history") {
-            HistoryScreen(
-                history = history,
+        composable("library") {
+            LibraryScreen(
+                library = history,
                 chainKeys = chainKeys,
                 onBack = { nav.popBackStack() },
                 onOpen = { vm.selectedTranscript = it; nav.navigate("transcript") },
+                onOpenSearch = { vm.searchStartAsk = false; nav.navigate("search") },
+                onDelete = { vm.softDelete(it) },
+                onUndoDelete = { vm.undoDelete() },
+                onCommitDelete = { vm.commitPendingDeletes() },
             )
         }
         composable("search") {
@@ -208,6 +243,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 query = vm.searchQuery,
                 onQueryChange = { vm.searchQuery = it },
                 chainKeys = chainKeys,
+                initialAsk = vm.searchStartAsk,
                 onBack = { nav.popBackStack() },
                 onOpen = { vm.selectedTranscript = it; nav.navigate("transcript") },
             )

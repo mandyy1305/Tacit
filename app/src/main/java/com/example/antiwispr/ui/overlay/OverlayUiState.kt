@@ -5,9 +5,12 @@ import com.example.antiwispr.VoiceNotes
 import com.example.antiwispr.ui.components.durationLabel
 import com.example.antiwispr.ui.components.waDateLabel
 
-enum class OverlayPhase { LISTENING, MATCHED, TRANSCRIBING, TRANSCRIPT, NO_MATCH, NOTICE }
+enum class OverlayPhase { LISTENING, MATCHED, TRANSCRIBING, TRANSCRIPT, CLOSE_MATCHES, NO_MATCH, NOTICE }
 
 enum class SummaryState { NONE, GENERATING, READY, UNAVAILABLE }
+
+/** The single recovery action a notice card may carry (doc 02 §2.J). */
+enum class NoticeAction { NONE, FINISH_SETUP, TRY_AGAIN, SHARE_SCREEN, LISTEN_AGAIN }
 
 /** Human-facing description of the matched note: "30 Jun · 0:42" (or "Voice note"). */
 data class MatchInfo(val meta: String)
@@ -22,6 +25,7 @@ data class OverlayUiState(
     val match: MatchInfo? = null,        // survives MATCHED → TRANSCRIBING → TRANSCRIPT
     val transcript: String? = null,
     val notice: String? = null,          // humanized bracket-message ("[no confident match …]")
+    val noticeAction: NoticeAction = NoticeAction.NONE, // recovery button the notice card offers
     val summaryState: SummaryState = SummaryState.NONE,
     val summaryRaw: String? = null,      // raw "SUMMARY:/ACTIONS:" text; parsed at render time
     val chainPart: Int = 0,              // this note's position in its burst (0 = no chain)
@@ -30,6 +34,8 @@ data class OverlayUiState(
     val chainMode: Boolean = false,      // "Transcribe all N" toggle: tabs cover the whole burst
     val chainParts: List<String?> = emptyList(), // per-part transcripts in chain mode; null = pending
     val copied: Boolean = false,
+    val source: String = "",             // provenance of the result/engine: "local" | "cloud" | "" = unknown
+    val candidates: List<MatchInfo> = emptyList(), // low-confidence picker rows; also the "Wrong note?" set
 )
 
 internal data class StatusInfo(val line: String, val warn: Boolean = false)
@@ -53,14 +59,24 @@ internal fun interpretStatus(raw: String): StatusInfo = when {
 internal fun humanizeNotice(bracket: String): String {
     val t = bracket.trim().removePrefix("[").removeSuffix("]")
     return when {
-        t.startsWith("no confident match") -> "No confident match. Try replaying the note."
-        t.startsWith("whisper model not downloaded") ->
-            "The Whisper model isn't downloaded yet — open TACIT and finish setup."
-        t.startsWith("whisper model not ready") -> "Whisper isn't ready yet — try again in a moment."
+        t.startsWith("no confident match") -> "No confident match. Replay the note and TACIT listens again."
+        t.startsWith("whisper model not downloaded") -> "Transcription isn't set up yet."
+        t.startsWith("whisper model not ready") -> "The transcriber is still warming up."
         t.startsWith("no speech detected") -> "No speech detected in this note."
         t.startsWith("no audio decoded") -> "Couldn't read this note's audio."
-        t.startsWith("matching error") -> "Something went wrong while matching — try again."
+        t.startsWith("matching error") -> "Something went wrong while matching."
         else -> t.replaceFirstChar { it.uppercase() }
+    }
+}
+
+/** The recovery action for a bracket notice, paired with [humanizeNotice]'s copy. */
+internal fun noticeActionFor(bracket: String): NoticeAction {
+    val t = bracket.trim().removePrefix("[").removeSuffix("]")
+    return when {
+        t.startsWith("whisper model not downloaded") -> NoticeAction.FINISH_SETUP
+        t.startsWith("whisper model not ready") -> NoticeAction.TRY_AGAIN
+        t.startsWith("matching error") -> NoticeAction.LISTEN_AGAIN
+        else -> NoticeAction.NONE
     }
 }
 

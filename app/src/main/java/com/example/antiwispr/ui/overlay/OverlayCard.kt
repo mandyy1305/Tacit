@@ -21,10 +21,15 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import android.content.ClipData
+import android.content.ClipboardManager
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,7 +54,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -64,18 +71,22 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.antiwispr.ActionEntity
 import com.example.antiwispr.EntityExtractor
+import com.example.antiwispr.ui.components.TacitIcons
 import com.example.antiwispr.ui.theme.Fraunces
 import com.example.antiwispr.ui.theme.Inter
 import com.example.antiwispr.ui.theme.TacitTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
@@ -109,6 +120,11 @@ fun TacitOverlayCard(
     onToggleChain: (Boolean) -> Unit = {},
     onRequestSummary: () -> Unit = {},
     onEntityTap: (ActionEntity) -> Unit = {},
+    onCommitCandidate: (Int) -> Unit = {},
+    onNoneOfThese: () -> Unit = {},
+    onWrongNote: () -> Unit = {},
+    onNoticeAction: (NoticeAction) -> Unit = {},
+    onListenAgain: () -> Unit = {},
     onExitFinished: () -> Unit,
 ) {
     val enterState = remember { MutableTransitionState(false) }
@@ -136,8 +152,27 @@ fun TacitOverlayCard(
     ) {
         val corner = RoundedCornerShape(20.dp)
         val maxCardHeight = (LocalConfiguration.current.screenHeightDp * 0.6f).dp
+        // Swipe-up to dismiss: the gesture translates + fades the CARD CONTENT; the window itself
+        // never moves or resizes (the frozen-window rule). Armed from the pinned header so it never
+        // fights the scrollable content pane.
+        var dragY by remember { mutableFloatStateOf(0f) }
+        val dismissPx = with(LocalDensity.current) { 56.dp.toPx() }
+        val dragModifier = Modifier.pointerInput(Unit) {
+            detectVerticalDragGestures(
+                onVerticalDrag = { change, delta ->
+                    change.consume()
+                    dragY = (dragY + delta).coerceIn(-1000f, 40f) // up freely; slight rubber-band down
+                },
+                onDragEnd = { if (dragY < -dismissPx) onClose() else dragY = 0f },
+                onDragCancel = { dragY = 0f },
+            )
+        }
         Column(
             Modifier
+                .graphicsLayer {
+                    translationY = dragY
+                    alpha = (1f + dragY / (dismissPx * 3f)).coerceIn(0f, 1f)
+                }
                 .fillMaxWidth()
                 .heightIn(max = maxCardHeight)
                 .shadow(12.dp, corner, ambientColor = Color.Black, spotColor = Color.Black)
@@ -154,7 +189,7 @@ fun TacitOverlayCard(
                 .border(1.dp, OverlayPalette.hairline, corner)
                 .padding(18.dp)
         ) {
-            Header(onClose)
+            Header(onClose, dragModifier)
 
             // Fade only — expand/shrink would animate layout height and resize the window
             // per frame (same stutter as above).
@@ -186,9 +221,10 @@ fun TacitOverlayCard(
                     OverlayPhase.LISTENING -> ListeningBody(state)
                     OverlayPhase.MATCHED -> MatchedBody(state)
                     OverlayPhase.TRANSCRIBING -> TranscribingBody(state)
-                    OverlayPhase.TRANSCRIPT -> TranscriptBody(state, onCopy, onToggleChain, onRequestSummary, onEntityTap)
-                    OverlayPhase.NO_MATCH -> NoMatchBody()
-                    OverlayPhase.NOTICE -> NoticeBody(state)
+                    OverlayPhase.TRANSCRIPT -> TranscriptBody(state, onCopy, onToggleChain, onRequestSummary, onEntityTap, onWrongNote)
+                    OverlayPhase.CLOSE_MATCHES -> CloseMatchesBody(state, onCommitCandidate, onNoneOfThese)
+                    OverlayPhase.NO_MATCH -> NoMatchBody(onListenAgain, onClose)
+                    OverlayPhase.NOTICE -> NoticeBody(state, onNoticeAction)
                 }
             }
         }
@@ -198,8 +234,8 @@ fun TacitOverlayCard(
 // ---- pieces ---------------------------------------------------------------------
 
 @Composable
-private fun Header(onClose: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+private fun Header(onClose: () -> Unit, dragModifier: Modifier = Modifier) {
+    Row(dragModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(
                 "TACIT",
@@ -240,12 +276,18 @@ private fun MicFallbackPill(onShare: () -> Unit) {
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            "Screen not shared — using mic",
-            modifier = Modifier.weight(1f),
-            fontFamily = Inter, fontSize = 12.sp,
-            color = OverlayPalette.ink,
-        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Using the mic for this one.",
+                fontFamily = Inter, fontWeight = FontWeight.Medium,
+                fontSize = 13.sp, color = OverlayPalette.ink,
+            )
+            Text(
+                "Screen share hears notes directly. Surer matches.",
+                fontFamily = Inter, fontSize = 11.sp,
+                color = OverlayPalette.inkMuted,
+            )
+        }
         Spacer(Modifier.width(8.dp))
         Box(
             Modifier
@@ -373,6 +415,39 @@ private fun TranscribingBody(state: OverlayUiState) {
         MatchLine(state, animateBadge = false)
         Spacer(Modifier.height(14.dp))
         TranscribingShimmer()
+        Spacer(Modifier.height(10.dp))
+        Text(
+            if (state.source == "cloud") "Transcribing with TACIT Cloud…" else "Transcribing on this phone…",
+            fontFamily = Inter, fontSize = 11.sp,
+            color = OverlayPalette.inkFaint,
+        )
+    }
+}
+
+/** Quiet provenance wordlet on results: "ON-DEVICE" or "CLOUD". Renders nothing when unknown. */
+@Composable
+private fun SourceMark(source: String) {
+    val label = when (source) {
+        "local" -> "ON-DEVICE"
+        "cloud" -> "CLOUD"
+        else -> return
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (source == "cloud") {
+            Icon(
+                TacitIcons.Cloud,
+                contentDescription = null,
+                modifier = Modifier.size(12.dp),
+                tint = OverlayPalette.inkMuted,
+            )
+            Spacer(Modifier.width(4.dp))
+        }
+        Text(
+            label,
+            fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+            fontSize = 10.sp, letterSpacing = 1.sp,
+            color = OverlayPalette.inkMuted,
+        )
     }
 }
 
@@ -419,6 +494,7 @@ private fun TranscriptBody(
     onToggleChain: (Boolean) -> Unit,
     onRequestSummary: () -> Unit,
     onEntityTap: (ActionEntity) -> Unit,
+    onWrongNote: () -> Unit,
 ) {
     // 0 = Transcript (default — instantly available), 1 = Summary (generated lazily the
     // first time the user opens it).
@@ -459,6 +535,19 @@ private fun TranscriptBody(
         }
         if (copyText.isNotBlank()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                SourceMark(state.source)
+                if (state.candidates.size > 1) {
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        "Wrong note?",
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { onWrongNote() }
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        fontFamily = Inter, fontSize = 11.sp,
+                        color = OverlayPalette.inkMuted,
+                    )
+                }
                 Spacer(Modifier.weight(1f))
                 Box(
                     Modifier
@@ -595,9 +684,11 @@ private fun SummaryPane(state: OverlayUiState, onEntityTap: (ActionEntity) -> Un
             // look identical.
             SummaryState.GENERATING, SummaryState.NONE -> Column {
                 Text(
-                    if (state.chainSummary && state.chainCount > 1)
-                        "Summarizing ${state.chainCount} notes…"
-                    else "Summarizing on this phone…",
+                    when {
+                        state.chainSummary && state.chainCount > 1 -> "Summarizing ${state.chainCount} notes…"
+                        state.source == "cloud" -> "Summarizing with TACIT Cloud…"
+                        else -> "Summarizing on this phone…"
+                    },
                     fontFamily = Inter, fontSize = 12.sp,
                     color = OverlayPalette.inkFaint,
                 )
@@ -605,7 +696,7 @@ private fun SummaryPane(state: OverlayUiState, onEntityTap: (ActionEntity) -> Un
                 TranscribingShimmer()
             }
             SummaryState.UNAVAILABLE -> Text(
-                "Summaries need a one-time model download — open TACIT → Settings → Summaries.",
+                "Summaries need a one-time setup. Open TACIT to set them up.",
                 fontFamily = Inter, fontSize = 13.sp,
                 color = OverlayPalette.inkMuted,
             )
@@ -668,23 +759,37 @@ private fun SummaryPane(state: OverlayUiState, onEntityTap: (ActionEntity) -> Un
     }
 }
 
-/** Tappable entity pills (the concrete ask) — overlay-styled clone of the chain toggle pill. */
+/** Tappable entity pills (the concrete ask) — overlay-styled clone of the chain toggle pill.
+ *  Tap acts (call, map, calendar); long-press copies the full text so a truncated chip is
+ *  never a dead end. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EntityChipsFlow(entities: List<ActionEntity>, onTap: (ActionEntity) -> Unit) {
+    val context = LocalContext.current
+    var copiedText by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(copiedText) { if (copiedText != null) { delay(1500); copiedText = null } }
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         entities.forEach { entity ->
+            val copied = copiedText == entity.text
             Box(
                 Modifier
                     .clip(RoundedCornerShape(8.dp))
                     .border(1.dp, OverlayPalette.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                    .clickable { onTap(entity) }
+                    .combinedClickable(
+                        onClick = { onTap(entity) },
+                        onLongClick = {
+                            context.getSystemService(ClipboardManager::class.java)
+                                ?.setPrimaryClip(ClipData.newPlainText("TACIT", entity.text))
+                            copiedText = entity.text
+                        },
+                    )
                     .padding(horizontal = 10.dp, vertical = 5.dp),
             ) {
                 Text(
-                    entity.text,
+                    if (copied) "Copied ✓" else entity.text,
                     fontFamily = Inter, fontWeight = FontWeight.Medium,
                     fontSize = 12.sp, color = OverlayPalette.accent,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -694,8 +799,85 @@ private fun EntityChipsFlow(entities: List<ActionEntity>, onTap: (ActionEntity) 
     }
 }
 
+/** Low-confidence disambiguation: up to three tappable candidate rows + "None of these". */
 @Composable
-private fun NoMatchBody() {
+private fun CloseMatchesBody(
+    state: OverlayUiState,
+    onCommit: (Int) -> Unit,
+    onNone: () -> Unit,
+) {
+    Column {
+        Text(
+            "CLOSE MATCHES",
+            fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+            fontSize = 10.sp, letterSpacing = 1.5.sp,
+            color = OverlayPalette.accent,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Not sure which one this was.",
+            fontFamily = Inter, fontWeight = FontWeight.Medium,
+            fontSize = 15.sp, color = OverlayPalette.ink,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "Pick the note you played.",
+            fontFamily = Inter, fontSize = 12.sp,
+            color = OverlayPalette.inkMuted,
+        )
+        Spacer(Modifier.height(12.dp))
+        state.candidates.take(3).forEachIndexed { i, c ->
+            CandidateRow(c.meta) { onCommit(i) }
+        }
+        Spacer(Modifier.height(8.dp))
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .border(1.dp, OverlayPalette.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                .clickable { onNone() }
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+        ) {
+            Text(
+                "None of these",
+                fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp, color = OverlayPalette.accent,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CandidateRow(meta: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            TacitIcons.Wave, contentDescription = null,
+            tint = OverlayPalette.accent, modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(
+                "Voice note",
+                fontFamily = Inter, fontWeight = FontWeight.Medium,
+                fontSize = 14.sp, color = OverlayPalette.ink,
+            )
+            Text(
+                meta,
+                fontFamily = Inter, fontSize = 12.sp,
+                color = OverlayPalette.inkMuted,
+            )
+        }
+    }
+}
+
+@Composable
+private fun NoMatchBody(onListenAgain: () -> Unit, onClose: () -> Unit) {
     Column {
         Text(
             "No confident match",
@@ -704,18 +886,57 @@ private fun NoMatchBody() {
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            "Try replaying the note — TACIT listens again from the start.",
+            "Replay the note and TACIT listens again from the start.",
             fontFamily = Inter, fontSize = 13.sp,
             color = OverlayPalette.inkMuted,
         )
+        Spacer(Modifier.height(14.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CardActionButton("Listen again", solid = true, onClick = onListenAgain)
+            CardActionButton("Close", solid = false, onClick = onClose)
+        }
     }
 }
 
 @Composable
-private fun NoticeBody(state: OverlayUiState) {
-    Text(
-        state.notice.orEmpty(),
-        fontFamily = Inter, fontSize = 13.sp,
-        color = OverlayPalette.inkMuted,
-    )
+private fun NoticeBody(state: OverlayUiState, onAction: (NoticeAction) -> Unit) {
+    Column {
+        Text(
+            state.notice.orEmpty(),
+            fontFamily = Inter, fontSize = 13.sp,
+            color = OverlayPalette.inkMuted,
+        )
+        val label = when (state.noticeAction) {
+            NoticeAction.FINISH_SETUP -> "Finish setup"
+            NoticeAction.TRY_AGAIN -> "Try again"
+            NoticeAction.SHARE_SCREEN -> "Share screen"
+            NoticeAction.LISTEN_AGAIN -> "Listen again"
+            NoticeAction.NONE -> null
+        }
+        if (label != null) {
+            Spacer(Modifier.height(14.dp))
+            CardActionButton(label, solid = true) { onAction(state.noticeAction) }
+        }
+    }
+}
+
+/** Compact in-card recovery button: solid amber primary, or amber-outline ghost. */
+@Composable
+private fun CardActionButton(label: String, solid: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .then(
+                if (solid) Modifier.background(OverlayPalette.accentDeep)
+                else Modifier.border(1.dp, OverlayPalette.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    ) {
+        Text(
+            label,
+            fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 12.sp,
+            color = if (solid) Color(0xFFFFF3E9) else OverlayPalette.accent,
+        )
+    }
 }

@@ -2,12 +2,11 @@ package com.example.antiwispr
 
 import android.annotation.SuppressLint
 import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.drawable.Icon
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioPlaybackCaptureConfiguration
@@ -54,7 +53,6 @@ class ProjectionService : Service(), AudioWindowSource {
         const val EXTRA_RESULT_DATA = "result_data"
         const val EXTRA_RATE = "rate"
 
-        private const val CHANNEL_ID = "antiwispr_projection"
         private const val NOTIF_ID = 0x4157 // "AW"
         private const val RING_SECONDS = 16 // holds a full streaming listen window + slack
 
@@ -261,20 +259,31 @@ class ProjectionService : Service(), AudioWindowSource {
     }
 
     private fun startAsForeground() {
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "Transcription session", NotificationManager.IMPORTANCE_LOW)
-        )
+        TacitNotifications.ensureChannels(this)
         val tap = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val notif: Notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("Transcription active")
-            .setContentText("Listening to internal audio (feasibility skeleton)")
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+        val stopPi = PendingIntent.getService(
+            this, 1,
+            Intent(this, ProjectionService::class.java).apply { action = ACTION_STOP_SESSION },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val notif: Notification = Notification.Builder(this, TacitNotifications.CHANNEL_SESSION)
+            .setContentTitle("Precision listening is on")
+            .setContentText("TACIT hears WhatsApp playback directly for cleaner matches. Audio is matched and discarded.")
+            .setStyle(Notification.BigTextStyle().bigText(
+                "TACIT hears WhatsApp playback directly for cleaner matches. Audio is matched and discarded."))
+            .setSmallIcon(R.drawable.ic_stat_tacit)
             .setOngoing(true)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setContentIntent(tap)
+            .addAction(
+                Notification.Action.Builder(
+                    Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+                    "Stop", stopPi
+                ).build()
+            )
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
