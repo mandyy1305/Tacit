@@ -432,12 +432,23 @@ private fun SourceMark(source: String) {
         "cloud" -> "CLOUD"
         else -> return
     }
-    Text(
-        label,
-        fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-        fontSize = 10.sp, letterSpacing = 1.sp,
-        color = OverlayPalette.inkMuted,
-    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (source == "cloud") {
+            Icon(
+                TacitIcons.Cloud,
+                contentDescription = null,
+                modifier = Modifier.size(12.dp),
+                tint = OverlayPalette.inkMuted,
+            )
+            Spacer(Modifier.width(4.dp))
+        }
+        Text(
+            label,
+            fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+            fontSize = 10.sp, letterSpacing = 1.sp,
+            color = OverlayPalette.inkMuted,
+        )
+    }
 }
 
 @Composable

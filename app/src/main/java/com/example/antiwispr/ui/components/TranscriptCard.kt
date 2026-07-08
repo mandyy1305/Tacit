@@ -11,7 +11,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -78,12 +81,23 @@ fun TranscriptCard(
                     )
                 }
                 if (chained) {
-                    Text(
-                        "CHAIN",
+                    Row(
                         modifier = Modifier.padding(end = 8.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.tertiary,
-                    )
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            TacitIcons.Chain,
+                            contentDescription = null,
+                            modifier = Modifier.size(13.dp),
+                            tint = MaterialTheme.colorScheme.tertiary,
+                        )
+                        Spacer(Modifier.width(3.dp))
+                        Text(
+                            "CHAIN",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
+                    }
                 }
                 Text(
                     relativeTime(transcript.updatedAt),

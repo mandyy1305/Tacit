@@ -98,6 +98,73 @@ object TacitIcons {
         }.build()
     }
 
+    /** Cloud (filled) — the TACIT Cloud provenance mark. Reads clean at badge sizes. */
+    val Cloud: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "tacit.cloud", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = SolidColor(Color.Black), pathFillType = PathFillType.NonZero
+            ) {
+                moveTo(19.35f, 10.04f)
+                curveTo(18.67f, 6.59f, 15.64f, 4f, 12f, 4f)
+                curveTo(9.11f, 4f, 6.6f, 5.64f, 5.35f, 8.04f)
+                curveTo(2.34f, 8.36f, 0f, 10.91f, 0f, 14f)
+                curveTo(0f, 17.31f, 2.69f, 20f, 6f, 20f)
+                lineTo(19f, 20f)
+                curveTo(21.76f, 20f, 24f, 17.76f, 24f, 15f)
+                curveTo(24f, 12.36f, 21.95f, 10.22f, 19.35f, 10.04f)
+                close()
+            }
+        }.build()
+    }
+
+    /** Chain link (filled) — the CHAIN badge mark for grouped-note bursts. */
+    val Chain: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "tacit.chain", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = SolidColor(Color.Black), pathFillType = PathFillType.NonZero
+            ) {
+                // Left hook
+                moveTo(3.9f, 12f)
+                curveTo(3.9f, 10.29f, 5.29f, 8.9f, 7f, 8.9f)
+                lineTo(11f, 8.9f)
+                lineTo(11f, 7f)
+                lineTo(7f, 7f)
+                curveTo(4.24f, 7f, 2f, 9.24f, 2f, 12f)
+                curveTo(2f, 14.76f, 4.24f, 17f, 7f, 17f)
+                lineTo(11f, 17f)
+                lineTo(11f, 15.1f)
+                lineTo(7f, 15.1f)
+                curveTo(5.29f, 15.1f, 3.9f, 13.71f, 3.9f, 12f)
+                close()
+                // Middle bar
+                moveTo(8f, 13f)
+                lineTo(16f, 13f)
+                lineTo(16f, 11f)
+                lineTo(8f, 11f)
+                close()
+                // Right hook
+                moveTo(17f, 7f)
+                lineTo(13f, 7f)
+                lineTo(13f, 8.9f)
+                lineTo(17f, 8.9f)
+                curveTo(18.71f, 8.9f, 20.1f, 10.29f, 20.1f, 12f)
+                curveTo(20.1f, 13.71f, 18.71f, 15.1f, 17f, 15.1f)
+                lineTo(13f, 15.1f)
+                lineTo(13f, 17f)
+                lineTo(17f, 17f)
+                curveTo(19.76f, 17f, 22f, 14.76f, 22f, 12f)
+                curveTo(22f, 9.24f, 19.76f, 7f, 17f, 7f)
+                close()
+            }
+        }.build()
+    }
+
     /** Sound wave — five vertical bars, the TACIT listening motif. */
     val Wave: ImageVector by lazy {
         ImageVector.Builder(
