@@ -30,6 +30,7 @@ data class OverlayUiState(
     val chainMode: Boolean = false,      // "Transcribe all N" toggle: tabs cover the whole burst
     val chainParts: List<String?> = emptyList(), // per-part transcripts in chain mode; null = pending
     val copied: Boolean = false,
+    val source: String = "",             // provenance of the result/engine: "local" | "cloud" | "" = unknown
 )
 
 internal data class StatusInfo(val line: String, val warn: Boolean = false)

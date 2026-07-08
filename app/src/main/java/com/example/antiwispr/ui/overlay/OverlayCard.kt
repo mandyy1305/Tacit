@@ -385,7 +385,29 @@ private fun TranscribingBody(state: OverlayUiState) {
         MatchLine(state, animateBadge = false)
         Spacer(Modifier.height(14.dp))
         TranscribingShimmer()
+        Spacer(Modifier.height(10.dp))
+        Text(
+            if (state.source == "cloud") "Transcribing with TACIT Cloud…" else "Transcribing on this phone…",
+            fontFamily = Inter, fontSize = 11.sp,
+            color = OverlayPalette.inkFaint,
+        )
     }
+}
+
+/** Quiet provenance wordlet on results: "ON-DEVICE" or "CLOUD". Renders nothing when unknown. */
+@Composable
+private fun SourceMark(source: String) {
+    val label = when (source) {
+        "local" -> "ON-DEVICE"
+        "cloud" -> "CLOUD"
+        else -> return
+    }
+    Text(
+        label,
+        fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+        fontSize = 10.sp, letterSpacing = 1.sp,
+        color = OverlayPalette.inkMuted,
+    )
 }
 
 @Composable
@@ -471,6 +493,7 @@ private fun TranscriptBody(
         }
         if (copyText.isNotBlank()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                SourceMark(state.source)
                 Spacer(Modifier.weight(1f))
                 Box(
                     Modifier
@@ -607,9 +630,11 @@ private fun SummaryPane(state: OverlayUiState, onEntityTap: (ActionEntity) -> Un
             // look identical.
             SummaryState.GENERATING, SummaryState.NONE -> Column {
                 Text(
-                    if (state.chainSummary && state.chainCount > 1)
-                        "Summarizing ${state.chainCount} notes…"
-                    else "Summarizing on this phone…",
+                    when {
+                        state.chainSummary && state.chainCount > 1 -> "Summarizing ${state.chainCount} notes…"
+                        state.source == "cloud" -> "Summarizing with TACIT Cloud…"
+                        else -> "Summarizing on this phone…"
+                    },
                     fontFamily = Inter, fontSize = 12.sp,
                     color = OverlayPalette.inkFaint,
                 )

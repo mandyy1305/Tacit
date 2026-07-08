@@ -159,6 +159,13 @@ class OverlayController(private val ctx: Context) {
         }
     }
 
+    /** Provenance of the current result / engine in flight: "local" (on-device) or "cloud". Drives
+     *  the SourceMark and the transcribing/summarizing captions. Additive to the frozen API. */
+    fun setSource(source: String) = onMain {
+        if (dropUpdate("source")) return@onMain
+        state.value = state.value.copy(source = source)
+    }
+
     fun setTranscript(text: String) = onMain {
         if (dropUpdate("transcript")) return@onMain
         ensureWindow()

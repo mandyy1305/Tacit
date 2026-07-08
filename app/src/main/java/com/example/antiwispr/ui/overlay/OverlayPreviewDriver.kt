@@ -76,10 +76,11 @@ object OverlayPreviewDriver {
         Thread.sleep(700); o.setStatus("listening 2.8s — leading: PTT-20260630-WA0012.opus (37)")
         Thread.sleep(500)
         o.setCandidates(listOf(fake("PTT-20260630-WA0012.opus", 42.0, 20260630, 52.0)), true)
+        o.setSource("local")
         o.setTranscript("transcribing…")
         Thread.sleep(2200)
         o.setTranscript(
-            "Haan bhai, kal milte hain office ke baad. I'll bring the documents you asked for — " +
+            "Haan bhai, kal milte hain office ke baad. I'll bring the documents you asked for: " +
                 "the lease agreement and both ID proofs. Agar time mile toh please banker ko " +
                 "call kar lena before five, warna appointment shift ho jayegi to next week. " +
                 "Aur haan, Priya said the venue is confirmed for the twenty-third, so block " +
@@ -99,7 +100,7 @@ object OverlayPreviewDriver {
             "- Sunday lunch pe mummy ke ghar jana"
 
     private const val FAKE_CHAIN_SUMMARY =
-        "SUMMARY: Poora plan set hai — kal office ke baad documents exchange, " +
+        "SUMMARY: Poora plan set hai, kal office ke baad documents exchange, " +
             "banker ka kaam aaj hi, 23rd ka event confirm, aur Sunday family lunch. " +
             "Sabse zaroori: banker ko 5 baje se pehle call karna.\n" +
             "ACTIONS:\n" +
@@ -109,7 +110,7 @@ object OverlayPreviewDriver {
             "- Sunday ko mummy ke ghar lunch"
 
     private const val FAKE_PART_2 =
-        "Haan bhai, kal milte hain office ke baad. I'll bring the documents you asked for — " +
+        "Haan bhai, kal milte hain office ke baad. I'll bring the documents you asked for: " +
             "the lease agreement and both ID proofs."
     private val FAKE_PARTS = arrayOf(
         "Arre sun, ek important baat batani thi tujhe. Do teen cheezein hain actually.",

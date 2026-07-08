@@ -269,7 +269,13 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
             return
         }
 
-        if (live()) overlay.setTranscript("transcribing…") // real ASR takes a few seconds (+ one-time model load)
+        if (live()) {
+            // Provenance caption reflects the engine that WILL run (updated to the actual source
+            // once the transcript lands in applyTranscript).
+            val willUseCloud = CloudClient.ready(appContext) && CloudPrefs.cloudTranscription(appContext)
+            overlay.setSource(if (willUseCloud) "cloud" else "local")
+            overlay.setTranscript("transcribing…") // real ASR takes a few seconds (+ one-time model load)
+        }
 
         // Long notes exceed Sarvam's 30s synchronous cap, so hand them to the async batch
         // API: the card stays on its spinner and the transcript arrives via FCM
@@ -323,6 +329,9 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
                 else -> overlay.setSummaryUnavailable()
             }
         }
+        // Reflect the actual engine that produced this transcript (from the cached record).
+        Transcripts.get(appContext).entry(file)?.source?.takeIf { it.isNotEmpty() }
+            ?.let { overlay.setSource(it) }
         overlay.setTranscript(transcript)
 
         // Chain detection: does this note belong to a burst? Membership comes from the chat run
