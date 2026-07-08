@@ -5,7 +5,8 @@ import android.content.ClipboardManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -266,7 +267,8 @@ private fun LibraryRow(
                         if (selected) Modifier.background(MaterialTheme.colorScheme.primary)
                         else Modifier.border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape)
                     )
-                    .clickable(onClick = onClick),
+                    // toggleable (not clickable) so TalkBack announces the checked/unchecked state.
+                    .toggleable(value = selected, role = Role.Checkbox, onValueChange = { onClick() }),
                 contentAlignment = Alignment.Center,
             ) {
                 if (selected) {
