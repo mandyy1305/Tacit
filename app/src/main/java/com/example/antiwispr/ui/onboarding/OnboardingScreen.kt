@@ -200,9 +200,9 @@ private fun StepPage(
                 )
                 Spacer(Modifier.height(20.dp))
                 Text(
-                    "TACIT listens when a WhatsApp voice note plays and shows you the words — " +
-                        "right there, over the chat. Everything runs on this phone; " +
-                        "nothing ever leaves it.",
+                    "TACIT reads WhatsApp voice notes while they play. The words float over " +
+                        "the chat, in the sender's own mix of languages. Made to stay private: " +
+                        "notes can be read on this phone alone.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -217,8 +217,9 @@ private fun StepPage(
                 )
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    "Open WhatsApp and play a voice note — the transcript appears on its own.\n\n" +
-                        "Tip: for the most accurate listening, start Precision listening from Home.",
+                    "Open WhatsApp and play any voice note. The words appear on their own, " +
+                        "right over the chat.\n\n" +
+                        "Tip: for the sharpest hearing, start Precision listening from Home.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -257,11 +258,12 @@ private data class StepCopy(val overline: String, val title: String, val body: S
 
 private fun stepCopy(step: SetupStep): StepCopy = when (step) {
     SetupStep.Microphone -> StepCopy(
-        "PERMISSIONS",
+        "PERMISSIONS · MICROPHONE",
         "Hear the note as it plays.",
-        "TACIT listens for a few seconds to identify which voice note is playing. " +
-            "Android requires the microphone permission for any audio capture — " +
-            "including the high-quality internal path."
+        "TACIT listens for a few seconds to recognise which voice note is playing, only " +
+            "after you press play. Android needs the microphone permission for any audio " +
+            "capture, including the sharper Precision listening path. The sound is discarded " +
+            "within seconds and never stored or uploaded."
     )
     SetupStep.Overlay -> StepCopy(
         "PERMISSIONS",
@@ -270,42 +272,44 @@ private fun stepCopy(step: SetupStep): StepCopy = when (step) {
             "have to switch apps. Android calls this “display over other apps”."
     )
     SetupStep.AllFiles -> StepCopy(
-        "PERMISSIONS",
+        "PERMISSIONS · FILES",
         "Find your voice notes.",
-        "Voice notes live in WhatsApp's media folder. TACIT reads those audio files " +
-            "to recognise and transcribe them — they never leave this device."
+        "Voice notes live in WhatsApp's media folder. TACIT reads those audio files to " +
+            "recognise which note is playing and to build your library. It reads voice notes only."
     )
     SetupStep.Notifications -> StepCopy(
         "PERMISSIONS · OPTIONAL",
         "A quiet heads-up.",
         "Android shows a small notification while TACIT is listening. " +
-            "This is optional — everything works without it."
+            "This is optional. Everything works without it."
     )
     SetupStep.Accessibility -> StepCopy(
-        "PERMISSIONS",
+        "PERMISSIONS · ACCESSIBILITY",
         "Notice the play tap.",
-        "TACIT uses an accessibility service — scoped only to WhatsApp — to notice " +
-            "when you tap play on a voice note. In the next screen, find TACIT under " +
-            "Installed apps and switch it on."
+        "TACIT uses an accessibility service, scoped only to WhatsApp, to notice when you " +
+            "tap play on a voice note. It reads the voice note's play control, length, time, " +
+            "and sender, and nothing else. In the next screen, find TACIT under Installed " +
+            "apps and switch it on."
     )
     SetupStep.Model -> StepCopy(
-        "ON-DEVICE SPEECH",
-        "Bring the words on-device.",
-        "TACIT transcribes with Whisper, running entirely on this phone. " +
-            "It's a one-time download of about 360 MB — Wi-Fi recommended."
+        "OFFLINE TRANSCRIPTION",
+        "Read notes on this phone.",
+        "Offline transcription runs entirely on this phone, no internet needed once " +
+            "installed. It's a one-time download of about 360 MB. Wi-Fi recommended."
     )
     SetupStep.Summaries -> StepCopy(
-        "ON-DEVICE AI · OPTIONAL",
-        "Turn notes into orders.",
-        "TACIT can distill every note into a short summary with action items — " +
-            "quantities, names, dates, promises. It's a one-time 1.6 GB download; " +
+        "OFFLINE SUMMARIES · OPTIONAL",
+        "Turn notes into briefs.",
+        "TACIT can distill every note into a short brief with action items: " +
+            "quantities, names, dates, promises. A one-time 1.6 GB download; " +
             "you can skip this and add it later from Settings."
     )
     SetupStep.Index -> StepCopy(
         "YOUR LIBRARY",
         "Learn your notes.",
-        "TACIT fingerprints the voice notes already on this phone so it can tell — " +
-            "in a couple of seconds — exactly which one is playing."
+        "TACIT makes a small sound signature of each voice note already on this phone " +
+            "so it can tell, in a couple of seconds, exactly which one is playing. " +
+            "Signatures never leave this phone."
     )
     else -> StepCopy("", "", "")
 }
@@ -357,13 +361,13 @@ private fun StepAction(
                     } else {
                         if (setup.modelStatus.startsWith("download failed") || setup.modelStatus == "incomplete") {
                             Text(
-                                "Something interrupted the download — it resumes from the finished files.",
+                                "Something interrupted the download. It resumes from where it stopped.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
                             )
                             Spacer(Modifier.height(10.dp))
                         }
-                        TacitButton("Download model  ·  360 MB", actions.downloadModel, Modifier.fillMaxWidth())
+                        TacitButton("Download the offline pack  ·  360 MB", actions.downloadModel, Modifier.fillMaxWidth())
                     }
                 }
                 SetupStep.Summaries -> {
@@ -372,13 +376,13 @@ private fun StepAction(
                     } else {
                         if (setup.llmStatus.startsWith("download failed") || setup.llmStatus == "incomplete") {
                             Text(
-                                "Something interrupted the download — it resumes where it left off.",
+                                "Something interrupted the download. It resumes where it left off.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
                             )
                             Spacer(Modifier.height(10.dp))
                         }
-                        TacitButton("Download model  ·  1.6 GB", actions.downloadLlm, Modifier.fillMaxWidth())
+                        TacitButton("Download the summaries pack  ·  1.6 GB", actions.downloadLlm, Modifier.fillMaxWidth())
                         Spacer(Modifier.height(6.dp))
                         GhostButton("Skip for now", onSkip, Modifier.align(Alignment.CenterHorizontally))
                     }

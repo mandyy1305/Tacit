@@ -152,7 +152,7 @@ fun TranscriptDetailScreen(
     var wholeChain by rememberSaveable(transcript.key) { mutableStateOf(false) }
     val chainTranscript = remember(chain?.id, chainEdits) {
         chainMembers.mapIndexed { i, (_, rec) ->
-            "[Note ${i + 1}]\n" + (rec?.text?.ifBlank { null } ?: "[not transcribed yet — tap “Transcribe all”]")
+            "[Note ${i + 1}]\n" + (rec?.text?.ifBlank { null } ?: "[not transcribed yet, tap Transcribe all]")
         }.joinToString("\n\n")
     }
     var chainRaw by remember(transcript.key, chainEdits) {
@@ -420,8 +420,8 @@ fun TranscriptDetailScreen(
             title = { Text("Delete transcript?", style = MaterialTheme.typography.headlineSmall) },
             text = {
                 Text(
-                    "The saved text is removed. The voice note itself is untouched — " +
-                        "play it again in WhatsApp and TACIT transcribes it fresh.",
+                    "The saved text is removed. The voice note itself is untouched. " +
+                        "Play it again in WhatsApp and TACIT transcribes it fresh.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },

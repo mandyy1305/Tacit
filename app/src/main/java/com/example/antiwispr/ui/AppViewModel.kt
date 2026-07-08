@@ -435,7 +435,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             if (result.startsWith("[")) {
                 AppLog.w("[retranscribe] ${t.name} failed: $result — keeping the old transcript.")
-                Toast.makeText(ctx, "Couldn't re-transcribe — ${result.trim('[', ']')}", Toast.LENGTH_LONG).show()
+                Toast.makeText(ctx, "Couldn't re-transcribe. Try again.", Toast.LENGTH_LONG).show()
             } else {
                 dropStaleChainGists(t) // gist was built from the old text
                 if (selectedTranscript?.key == t.key) selectedTranscript = Transcripts.get(ctx).entry(file)
