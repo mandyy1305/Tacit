@@ -151,7 +151,8 @@ private const val NUM = """(?:\d{1,3}(?:,\d{2,3})+|\d{1,8})(?:\.\d{1,2})?"""
 // runs (phones, dates) can never match. Suffix form: 1500 rupees · 500 rs.
 internal val AMOUNT_RX = Regex(
     """(?:₹|\bRs\.?|\bINR\b)\s*($NUM)(?!\d)""" +
-        """|\b($NUM)\s*(?:rupees?|rs)\b""",
+        """|\b($NUM)\s*(?:rupees?|rs)\b""" +
+        """|([${'$'}€£])\s*($NUM)(?!\d)""", // common foreign symbols so "$50" also chips
     RegexOption.IGNORE_CASE,
 )
 
@@ -175,10 +176,22 @@ internal fun normalizeAmount(numText: String): String? {
     return "₹$grouped$frac"
 }
 
+/** "$1500" / "€ 2,000" / "£50" → "$1,500" etc. (Western thousands grouping); null if unparseable. */
+internal fun normalizeForeign(symbol: String, numText: String): String? {
+    val clean = numText.replace(",", "")
+    val intPart = clean.substringBefore('.').trimStart('0').ifEmpty { "0" }
+    if (intPart.any { !it.isDigit() }) return null
+    val grouped = intPart.reversed().chunked(3).joinToString(",").reversed()
+    val frac = clean.substringAfter('.', "").let { if (it.isEmpty()) "" else "." + it.padEnd(2, '0').take(2) }
+    return "$symbol$grouped$frac"
+}
+
 internal fun amountCandidates(joined: String): List<EntityCandidate> =
     AMOUNT_RX.findAll(joined).mapNotNull { m ->
-        val numText = m.groupValues[1].ifEmpty { m.groupValues[2] }
-        val label = normalizeAmount(numText) ?: return@mapNotNull null
+        val inr = m.groupValues[1].ifEmpty { m.groupValues[2] }
+        val label = (if (inr.isNotEmpty()) normalizeAmount(inr)
+                     else normalizeForeign(m.groupValues[3], m.groupValues[4]))
+            ?: return@mapNotNull null
         EntityCandidate(
             EntityKind.AMOUNT, m.range.first, m.range.last + 1,
             text = label, data = label, sourceLine = lineAt(joined, m.range.first),
