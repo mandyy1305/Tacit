@@ -22,6 +22,13 @@ object Toggles {
     @Volatile var onboardingDone: Boolean = false
         private set
 
+    /** Timestamps of the Play prominent-disclosure consents (0 = not yet given). Recorded BEFORE
+     *  the user is sent to the system settings to enable the service. */
+    @Volatile var accessibilityConsentMs: Long = 0L
+        private set
+    @Volatile var micConsentMs: Long = 0L
+        private set
+
     // ---- Persisted behaviour preferences -----------------------------------------------------
 
     /** Run the capture -> match -> transcribe -> overlay flow on a detected play-tap. */
@@ -59,15 +66,23 @@ object Toggles {
         orchestrationEnabled = p.getBoolean("orchestration_enabled", true)
         micFallbackEnabled = p.getBoolean("mic_fallback_enabled", true)
         pauseOnMatch = p.getBoolean("pause_on_match", true)
+        accessibilityConsentMs = p.getLong("a11y_consent_ms", 0L)
+        micConsentMs = p.getLong("mic_consent_ms", 0L)
     }
 
     fun setTacitEnabled(context: Context, v: Boolean) { tacitEnabled = v; persist(context, "tacit_enabled", v) }
     fun setOnboardingDone(context: Context, v: Boolean) { onboardingDone = v; persist(context, "onboarding_done", v) }
+    fun setAccessibilityConsent(context: Context, ms: Long) { accessibilityConsentMs = ms; persistLong(context, "a11y_consent_ms", ms) }
+    fun setMicConsent(context: Context, ms: Long) { micConsentMs = ms; persistLong(context, "mic_consent_ms", ms) }
     fun setOrchestration(context: Context, v: Boolean) { orchestrationEnabled = v; persist(context, "orchestration_enabled", v) }
     fun setMicFallback(context: Context, v: Boolean) { micFallbackEnabled = v; persist(context, "mic_fallback_enabled", v) }
     fun setPauseOnMatch(context: Context, v: Boolean) { pauseOnMatch = v; persist(context, "pause_on_match", v) }
 
     private fun persist(context: Context, key: String, v: Boolean) {
         prefs(context).edit().putBoolean(key, v).apply()
+    }
+
+    private fun persistLong(context: Context, key: String, v: Long) {
+        prefs(context).edit().putLong(key, v).apply()
     }
 }

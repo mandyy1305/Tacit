@@ -22,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -34,6 +35,8 @@ import com.example.antiwispr.AppLog
 import com.example.antiwispr.ProjectionService
 import com.example.antiwispr.Toggles
 import com.example.antiwispr.Transcripts
+import com.example.antiwispr.cloud.CloudAuth
+import kotlinx.coroutines.launch
 import com.example.antiwispr.ui.home.HomeScreen
 import com.example.antiwispr.ui.library.LibraryScreen
 import com.example.antiwispr.ui.onboarding.OnboardingScreen
@@ -55,11 +58,13 @@ class SetupActions(
     val startSession: () -> Unit,
     val stopSession: () -> Unit,
     val turnOn: () -> Unit,
+    val signIn: () -> Unit,
 )
 
 @Composable
 fun AppRoot(vm: AppViewModel = viewModel()) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val setup by vm.setup.collectAsStateWithLifecycle()
     val recents by vm.recents.collectAsStateWithLifecycle()
     val history by vm.history.collectAsStateWithLifecycle()
@@ -138,6 +143,13 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
             },
             stopSession = { vm.stopSession() },
             turnOn = { vm.setTacitEnabled(true) },
+            signIn = {
+                scope.launch {
+                    CloudAuth.signIn(context)
+                        .onSuccess { vm.onSignedIn() }
+                        .onFailure { AppLog.w("[onboarding] sign-in failed: ${it.message}") }
+                }
+            },
         )
     }
 
