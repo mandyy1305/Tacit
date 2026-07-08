@@ -75,7 +75,14 @@ object OverlayPreviewDriver {
         Thread.sleep(700); o.setStatus("listening 2.1s — leading: PTT-20260630-WA0012.opus (14)")
         Thread.sleep(700); o.setStatus("listening 2.8s — leading: PTT-20260630-WA0012.opus (37)")
         Thread.sleep(500)
-        o.setCandidates(listOf(fake("PTT-20260630-WA0012.opus", 42.0, 20260630, 52.0)), true)
+        o.setCandidates(
+            listOf(
+                fake("PTT-20260630-WA0012.opus", 42.0, 20260630, 52.0),
+                fake("PTT-20260629-WA0031.opus", 41.0, 20260629, 18.0),
+                fake("PTT-20260630-WA0007.opus", 44.0, 20260630, 12.0),
+            ),
+            true,
+        )
         o.setSource("local")
         o.setTranscript("transcribing…")
         Thread.sleep(2200)
@@ -137,7 +144,7 @@ object OverlayPreviewDriver {
             },
             false,
         )
-        o.setTranscript("[no confident match after 12s]")
+        // No setTranscript — a low-confidence result renders as the close-matches picker (state H).
     }
 
     private fun fake(name: String, dur: Double, waDate: Int, score: Double) = CandidateFile(

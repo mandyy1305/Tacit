@@ -77,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.antiwispr.ActionEntity
 import com.example.antiwispr.EntityExtractor
+import com.example.antiwispr.ui.components.TacitIcons
 import com.example.antiwispr.ui.theme.Fraunces
 import com.example.antiwispr.ui.theme.Inter
 import com.example.antiwispr.ui.theme.TacitTheme
@@ -115,6 +116,9 @@ fun TacitOverlayCard(
     onToggleChain: (Boolean) -> Unit = {},
     onRequestSummary: () -> Unit = {},
     onEntityTap: (ActionEntity) -> Unit = {},
+    onCommitCandidate: (Int) -> Unit = {},
+    onNoneOfThese: () -> Unit = {},
+    onWrongNote: () -> Unit = {},
     onExitFinished: () -> Unit,
 ) {
     val enterState = remember { MutableTransitionState(false) }
@@ -192,7 +196,8 @@ fun TacitOverlayCard(
                     OverlayPhase.LISTENING -> ListeningBody(state)
                     OverlayPhase.MATCHED -> MatchedBody(state)
                     OverlayPhase.TRANSCRIBING -> TranscribingBody(state)
-                    OverlayPhase.TRANSCRIPT -> TranscriptBody(state, onCopy, onToggleChain, onRequestSummary, onEntityTap)
+                    OverlayPhase.TRANSCRIPT -> TranscriptBody(state, onCopy, onToggleChain, onRequestSummary, onEntityTap, onWrongNote)
+                    OverlayPhase.CLOSE_MATCHES -> CloseMatchesBody(state, onCommitCandidate, onNoneOfThese)
                     OverlayPhase.NO_MATCH -> NoMatchBody()
                     OverlayPhase.NOTICE -> NoticeBody(state)
                 }
@@ -453,6 +458,7 @@ private fun TranscriptBody(
     onToggleChain: (Boolean) -> Unit,
     onRequestSummary: () -> Unit,
     onEntityTap: (ActionEntity) -> Unit,
+    onWrongNote: () -> Unit,
 ) {
     // 0 = Transcript (default — instantly available), 1 = Summary (generated lazily the
     // first time the user opens it).
@@ -494,6 +500,18 @@ private fun TranscriptBody(
         if (copyText.isNotBlank()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SourceMark(state.source)
+                if (state.candidates.size > 1) {
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        "Wrong note?",
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { onWrongNote() }
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        fontFamily = Inter, fontSize = 11.sp,
+                        color = OverlayPalette.inkMuted,
+                    )
+                }
                 Spacer(Modifier.weight(1f))
                 Box(
                     Modifier
@@ -741,6 +759,83 @@ private fun EntityChipsFlow(entities: List<ActionEntity>, onTap: (ActionEntity) 
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+    }
+}
+
+/** Low-confidence disambiguation: up to three tappable candidate rows + "None of these". */
+@Composable
+private fun CloseMatchesBody(
+    state: OverlayUiState,
+    onCommit: (Int) -> Unit,
+    onNone: () -> Unit,
+) {
+    Column {
+        Text(
+            "CLOSE MATCHES",
+            fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+            fontSize = 10.sp, letterSpacing = 1.5.sp,
+            color = OverlayPalette.accent,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Not sure which one this was.",
+            fontFamily = Inter, fontWeight = FontWeight.Medium,
+            fontSize = 15.sp, color = OverlayPalette.ink,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "Pick the note you played.",
+            fontFamily = Inter, fontSize = 12.sp,
+            color = OverlayPalette.inkMuted,
+        )
+        Spacer(Modifier.height(12.dp))
+        state.candidates.take(3).forEachIndexed { i, c ->
+            CandidateRow(c.meta) { onCommit(i) }
+        }
+        Spacer(Modifier.height(8.dp))
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .border(1.dp, OverlayPalette.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                .clickable { onNone() }
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+        ) {
+            Text(
+                "None of these",
+                fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp, color = OverlayPalette.accent,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CandidateRow(meta: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            TacitIcons.Wave, contentDescription = null,
+            tint = OverlayPalette.accent, modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(
+                "Voice note",
+                fontFamily = Inter, fontWeight = FontWeight.Medium,
+                fontSize = 14.sp, color = OverlayPalette.ink,
+            )
+            Text(
+                meta,
+                fontFamily = Inter, fontSize = 12.sp,
+                color = OverlayPalette.inkMuted,
+            )
         }
     }
 }

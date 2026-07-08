@@ -43,6 +43,10 @@ class OverlayController(private val ctx: Context) {
     @Volatile var onToggleChain: ((Boolean) -> Unit)? = null
     /** Invoked when the user opens the Summary tab and no summary exists yet (lazy generation). */
     @Volatile var onRequestSummary: (() -> Unit)? = null
+    /** Card's candidate picker: commit the tapped alternate as the match (index into candidates). */
+    @Volatile var onCommitCandidate: ((Int) -> Unit)? = null
+    /** Card's "None of these" ghost from the close-matches picker. */
+    @Volatile var onNoneOfThese: (() -> Unit)? = null
     /** True once the user dismissed the card; blocks a still-running listen from re-creating it. */
     @Volatile private var dismissed = false
     /** When a result is showing, ignore outside-touch dismissal (incl. our own pause-on-match click). */
@@ -151,12 +155,33 @@ class OverlayController(private val ctx: Context) {
         onMain {
             if (dropUpdate("match result")) return@onMain
             ensureWindow() // a result must never land on a missing window — recreate if needed
+            val infos = candidates.map { it.toMatchInfo() }
             state.value = state.value.copy(
                 visible = true,
-                phase = if (confident) OverlayPhase.MATCHED else OverlayPhase.NO_MATCH,
-                match = candidates.firstOrNull()?.toMatchInfo(),
+                phase = when {
+                    confident -> OverlayPhase.MATCHED
+                    infos.size >= 2 -> OverlayPhase.CLOSE_MATCHES // low-confidence: let the user pick
+                    else -> OverlayPhase.NO_MATCH
+                },
+                match = infos.firstOrNull(),
+                candidates = infos,
             )
         }
+    }
+
+    /** Re-open the close-matches picker from a confident result ("Wrong note?"); only when the
+     *  session actually carried alternates. */
+    fun showCandidatePicker() = onMain {
+        if (dropUpdate("candidate picker")) return@onMain
+        if (state.value.candidates.size >= 2) {
+            state.value = state.value.copy(phase = OverlayPhase.CLOSE_MATCHES)
+        }
+    }
+
+    /** Collapse the picker to the plain no-match state ("None of these"). */
+    fun showNoMatch() = onMain {
+        if (dropUpdate("no match")) return@onMain
+        state.value = state.value.copy(phase = OverlayPhase.NO_MATCH)
     }
 
     /** Provenance of the current result / engine in flight: "local" (on-device) or "cloud". Drives
@@ -275,6 +300,9 @@ class OverlayController(private val ctx: Context) {
                         onCopy = { text -> copyText(text) },
                         onToggleChain = { on -> onToggleChain?.invoke(on) },
                         onRequestSummary = { onRequestSummary?.invoke() },
+                        onCommitCandidate = { i -> onCommitCandidate?.invoke(i) },
+                        onNoneOfThese = { onNoneOfThese?.invoke() },
+                        onWrongNote = { showCandidatePicker() },
                         // Launching an external app (Maps/dialer/calendar) must drop the card —
                         // the overlay window floats above whatever it just opened. In-place
                         // actions (amount copy) return false and keep it up.
