@@ -5,7 +5,7 @@ import com.example.antiwispr.VoiceNotes
 import com.example.antiwispr.ui.components.durationLabel
 import com.example.antiwispr.ui.components.waDateLabel
 
-enum class OverlayPhase { LISTENING, MATCHED, TRANSCRIBING, TRANSCRIPT, CLOSE_MATCHES, NO_MATCH, NOTICE }
+enum class OverlayPhase { LISTENING, MATCHED, TRANSCRIBING, TRANSCRIPT, NO_MATCH, NOTICE }
 
 enum class SummaryState { NONE, GENERATING, READY, UNAVAILABLE }
 
@@ -35,7 +35,6 @@ data class OverlayUiState(
     val chainParts: List<String?> = emptyList(), // per-part transcripts in chain mode; null = pending
     val copied: Boolean = false,
     val source: String = "",             // provenance of the result/engine: "local" | "cloud" | "" = unknown
-    val candidates: List<MatchInfo> = emptyList(), // low-confidence close-matches picker rows
 )
 
 internal data class StatusInfo(val line: String, val warn: Boolean = false)

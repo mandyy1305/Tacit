@@ -51,10 +51,6 @@ class OverlayController(private val ctx: Context) {
     @Volatile var onPartVisible: ((Int) -> Unit)? = null
     /** Invoked when the user opens the Summary tab and no summary exists yet (lazy generation). */
     @Volatile var onRequestSummary: (() -> Unit)? = null
-    /** Card's candidate picker: commit the tapped alternate as the match (index into candidates). */
-    @Volatile var onCommitCandidate: ((Int) -> Unit)? = null
-    /** Card's "None of these" ghost from the close-matches picker. */
-    @Volatile var onNoneOfThese: (() -> Unit)? = null
     /** Notice "Try again": retry transcription of the matched note in place. */
     @Volatile var onTryAgain: (() -> Unit)? = null
     /** No-match / matching-error "Listen again": re-arm a fresh capture session. */
@@ -178,18 +174,13 @@ class OverlayController(private val ctx: Context) {
             val infos = candidates.map { it.toMatchInfo() }
             state.value = state.value.copy(
                 visible = true,
-                phase = when {
-                    confident -> OverlayPhase.MATCHED
-                    infos.size >= 2 -> OverlayPhase.CLOSE_MATCHES // low-confidence: let the user pick
-                    else -> OverlayPhase.NO_MATCH
-                },
+                phase = if (confident) OverlayPhase.MATCHED else OverlayPhase.NO_MATCH,
                 match = infos.firstOrNull(),
-                candidates = infos,
             )
         }
     }
 
-    /** Collapse the picker to the plain no-match state ("None of these"). */
+    /** Show the plain no-match recovery state (replay prompt; screen-share nudge if on the mic). */
     fun showNoMatch() = onMain {
         if (dropUpdate("no match")) return@onMain
         state.value = state.value.copy(phase = OverlayPhase.NO_MATCH)
@@ -317,8 +308,6 @@ class OverlayController(private val ctx: Context) {
                         onToggleChain = { on -> onToggleChain?.invoke(on) },
                         onPartVisible = { i -> onPartVisible?.invoke(i) },
                         onRequestSummary = { onRequestSummary?.invoke() },
-                        onCommitCandidate = { i -> onCommitCandidate?.invoke(i) },
-                        onNoneOfThese = { onNoneOfThese?.invoke() },
                         onNoticeAction = { action ->
                             when (action) {
                                 NoticeAction.FINISH_SETUP -> { launchApp(); dismiss() }

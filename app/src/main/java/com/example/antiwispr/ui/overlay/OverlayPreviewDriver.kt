@@ -106,14 +106,8 @@ object OverlayPreviewDriver {
             1.6 to "listening 1.6s… (no match yet)",
             2.5 to "listening 2.5s… (no match yet)",
         ))
-        o.clearBanner()
-        o.setCandidates(
-            (1..6).map { i ->
-                fake("PTT-2026062$i-WA000$i.opus", 8.0 * i, 20260620 + i, 24.0 / i)
-            },
-            false,
-        )
-        // No setTranscript — a low-confidence result renders as the close-matches picker (state H).
+        // Keep the mic banner set so no-match shows the Share-screen recovery variant.
+        o.setCandidates(emptyList(), false) // → NO_MATCH (plain replay prompt + share nudge)
     }
 
     /** Drives [steps] ~90 ms ticks of the listening state: pushes a synthetic, speech-like audio

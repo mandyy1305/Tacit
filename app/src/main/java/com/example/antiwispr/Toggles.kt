@@ -43,6 +43,16 @@ object Toggles {
     @Volatile var pauseOnMatch: Boolean = true
         private set
 
+    // ---- Overlay coach-marks: persisted counts of times each tooltip has been shown. A tooltip
+    //      keeps showing until the user does the action (count jumps to the cap) or it has been
+    //      shown COACH_CAP times — a few reminders, never nagging forever. ---------------------
+    @Volatile var shareTipCount: Int = 0
+        private set
+    @Volatile var swipeTipCount: Int = 0
+        private set
+    @Volatile var aiTipCount: Int = 0
+        private set
+
     // ---- Session-scoped developer switches (not persisted) -----------------------------------
 
     /** Dump the clicked node + parent + siblings to logcat and the debug overlay. Default follows
@@ -68,7 +78,15 @@ object Toggles {
         pauseOnMatch = p.getBoolean("pause_on_match", true)
         accessibilityConsentMs = p.getLong("a11y_consent_ms", 0L)
         micConsentMs = p.getLong("mic_consent_ms", 0L)
+        shareTipCount = p.getInt("share_tip_count", 0)
+        swipeTipCount = p.getInt("swipe_tip_count", 0)
+        aiTipCount = p.getInt("ai_tip_count", 0)
     }
+
+    fun setShareTipCount(context: Context, v: Int) { shareTipCount = v; persistInt(context, "share_tip_count", v) }
+    fun setSwipeTipCount(context: Context, v: Int) { swipeTipCount = v; persistInt(context, "swipe_tip_count", v) }
+    fun setAiTipCount(context: Context, v: Int) { aiTipCount = v; persistInt(context, "ai_tip_count", v) }
+    private fun persistInt(context: Context, key: String, v: Int) { prefs(context).edit().putInt(key, v).apply() }
 
     fun setTacitEnabled(context: Context, v: Boolean) { tacitEnabled = v; persist(context, "tacit_enabled", v) }
     fun setOnboardingDone(context: Context, v: Boolean) { onboardingDone = v; persist(context, "onboarding_done", v) }

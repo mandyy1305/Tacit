@@ -60,9 +60,6 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
     @Volatile private var currentPartIndex = 0
     /** Per-part transcripts for [pendingChain], filled lazily as the user swipes; null = not yet done. */
     @Volatile private var chainPartCache: Array<String?>? = null
-    /** Ranked candidates for the low-confidence close-matches picker; index-aligned with the rows
-     *  so a tapped row commits the right file. */
-    @Volatile private var sessionCandidates: List<CandidateFile> = emptyList()
     /** The committed match for the current session (target of the "Try again" notice retry). */
     @Volatile private var sessionMatch: CandidateFile? = null
     /** Card's "Transcribe all N" toggle — Summary tab yields the chain gist while true. */
@@ -91,8 +88,6 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         overlay.onToggleChain = { on -> onChainModeToggled(on) }
         overlay.onPartVisible = { i -> onPartVisible(i) }
         overlay.onRequestSummary = { requestNoteSummary() }
-        overlay.onCommitCandidate = { i -> commitCandidate(i) }
-        overlay.onNoneOfThese = { overlay.showNoMatch() }
         overlay.onTryAgain = { retryTranscript() }
         overlay.onListenAgain = { listenAgain() }
     }
@@ -219,11 +214,7 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
 
                 if (elapsed >= MAX_LISTEN) {
                     AppLog.w("[orchestrator] MAX_LISTEN ${MAX_LISTEN}s reached — no confident match.")
-                    // Surface the close matches so the user can pick (state H); no bare no-match
-                    // notice. Read duration only for the (up to 3) rows that render.
-                    val cands = ranked.take(6).mapIndexed { idx, s -> toCandidate(s, withDuration = idx < 3) }
-                    sessionCandidates = cands
-                    overlay.setCandidates(cands, false)
+                    overlay.showNoMatch() // plain replay prompt (+ screen-share nudge if on the mic)
                     return
                 }
             }
@@ -266,7 +257,6 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
     private fun finalizeMatch(top: Scored, elapsed: Double) {
         AppLog.i("[orchestrator] ✅ CONFIDENT after %.1fs: ${top.name} aligned=${top.aligned} -> transcribe.".format(elapsed))
         val cand = toCandidate(top, withDuration = true)
-        sessionCandidates = listOf(cand)
         sessionMatch = cand
         overlay.setCandidates(listOf(cand), true) // show result + mark card sticky BEFORE the pause click
         if (Toggles.pauseOnMatch && !cancelRequested) {
@@ -277,19 +267,6 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         // Capture is over. Hand transcription/summary to their own thread and return, so the
         // listen worker's `finally` releases [listening] NOW — the next play-tap starts a fresh
         // session immediately instead of being silently ignored for the whole Whisper pass.
-        val gen = generation
-        transcribeExec.execute { resolveTranscriptAndSummary(cand, gen) }
-    }
-
-    /** User picked an alternate from the close-matches picker. Commit it as the
-     *  match and transcribe it via the normal path (same session as the play-tap). */
-    private fun commitCandidate(index: Int) {
-        val picked = sessionCandidates.getOrNull(index) ?: return
-        val cand = if (picked.durationSec < 0) picked.copy(durationSec = readDurationSec(picked.file)) else picked
-        AppLog.i("[orchestrator] user committed candidate #$index: ${cand.name}")
-        sessionMatch = cand
-        overlay.setCandidates(listOf(cand), true) // → MATCHED with the chosen note (keeps card sticky)
-        if (Toggles.pauseOnMatch) onMatchPause?.invoke()
         val gen = generation
         transcribeExec.execute { resolveTranscriptAndSummary(cand, gen) }
     }
