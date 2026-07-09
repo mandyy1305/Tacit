@@ -402,4 +402,68 @@ object TacitIcons {
             }
         }.build()
     }
+
+    /** Two people (outline) — the group/chat mark on a note card. */
+    val People: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "tacit.people", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.6f,
+                strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                // Front person: head + shoulders
+                moveTo(14f, 5.9f)
+                curveTo(15.44f, 5.9f, 16.6f, 7.06f, 16.6f, 8.5f)
+                curveTo(16.6f, 9.94f, 15.44f, 11.1f, 14f, 11.1f)
+                curveTo(12.56f, 11.1f, 11.4f, 9.94f, 11.4f, 8.5f)
+                curveTo(11.4f, 7.06f, 12.56f, 5.9f, 14f, 5.9f)
+                close()
+                moveTo(9.5f, 18.5f)
+                curveTo(9.5f, 15.6f, 11.5f, 13.2f, 14f, 13.2f)
+                curveTo(16.5f, 13.2f, 18.5f, 15.6f, 18.5f, 18.5f)
+                // Back person: head + partial shoulder
+                moveTo(7.5f, 5.9f)
+                curveTo(8.66f, 5.9f, 9.6f, 6.84f, 9.6f, 8f)
+                curveTo(9.6f, 9.16f, 8.66f, 10.1f, 7.5f, 10.1f)
+                curveTo(6.34f, 10.1f, 5.4f, 9.16f, 5.4f, 8f)
+                curveTo(5.4f, 6.84f, 6.34f, 5.9f, 7.5f, 5.9f)
+                close()
+                moveTo(3.6f, 17.8f)
+                curveTo(3.6f, 15.2f, 5.2f, 13f, 7.4f, 12.5f)
+            }
+        }.build()
+    }
+
+    /** Calendar (outline) — the note-card date mark. */
+    val Calendar: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "tacit.calendar", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.6f,
+                strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                // Body
+                moveTo(6f, 5.5f)
+                lineTo(18f, 5.5f)
+                curveTo(19.1f, 5.5f, 20f, 6.4f, 20f, 7.5f)
+                lineTo(20f, 18f)
+                curveTo(20f, 19.1f, 19.1f, 20f, 18f, 20f)
+                lineTo(6f, 20f)
+                curveTo(4.9f, 20f, 4f, 19.1f, 4f, 18f)
+                lineTo(4f, 7.5f)
+                curveTo(4f, 6.4f, 4.9f, 5.5f, 6f, 5.5f)
+                close()
+                // Header rule
+                moveTo(4f, 9.5f)
+                lineTo(20f, 9.5f)
+                // Hangers
+                moveTo(8f, 3.5f); lineTo(8f, 6.8f)
+                moveTo(16f, 3.5f); lineTo(16f, 6.8f)
+            }
+        }.build()
+    }
 }

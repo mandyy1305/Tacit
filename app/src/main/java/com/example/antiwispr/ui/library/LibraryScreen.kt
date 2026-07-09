@@ -250,7 +250,7 @@ fun LibraryScreen(
                 LazyColumn(
                     state = listState,
                     contentPadding = PaddingValues(bottom = 32.dp),
-                    verticalArrangement = Arrangement.spacedBy(Dimens.itemGap),
+                    verticalArrangement = Arrangement.spacedBy(11.dp),
                 ) {
                     groups.forEach { (dayEpoch, dayItems) ->
                         item(key = "h$dayEpoch") { DayHeader(dayHeaderLabel(dayEpoch)) }
@@ -342,11 +342,13 @@ private fun DayHeader(label: String) {
     Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
         Text(
             label,
-            modifier = Modifier.padding(start = Dimens.screenPad, end = Dimens.screenPad, top = 12.dp, bottom = 6.dp),
+            modifier = Modifier.padding(start = Dimens.screenPad, end = Dimens.screenPad, top = 8.dp, bottom = 4.dp),
             style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.2.sp),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        InkDivider()
+        // Inset the rule so it doesn't run edge-to-edge: it starts a little left of the day label
+        // and stops short of the right edge.
+        InkDivider(Modifier.padding(horizontal = 16.dp))
     }
 }
 
