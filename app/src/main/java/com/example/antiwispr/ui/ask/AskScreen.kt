@@ -1,5 +1,23 @@
 package com.example.antiwispr.ui.ask
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -30,7 +48,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -41,13 +58,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -69,6 +90,7 @@ import com.example.antiwispr.ui.theme.Dimens
 fun AskScreen(
     messages: List<AskMessage>,
     busy: Boolean,
+    entered: MutableSet<Long> = mutableSetOf(),
     chainKeys: Set<String> = emptySet(),
     onSend: (String) -> Unit,
     onClear: () -> Unit,
@@ -76,10 +98,12 @@ fun AskScreen(
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
 
-    // Keep the newest turn in view as the thread grows and as the assistant's status updates.
+    // Keep the newest turn in view as the thread grows (index 0 is the bottom in reverseLayout).
     LaunchedEffect(messages.size, busy) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+        if (messages.isNotEmpty()) listState.animateScrollToItem(0)
     }
 
     Scaffold(
@@ -119,24 +143,48 @@ fun AskScreen(
                 }
             }
 
-            if (messages.isEmpty()) {
-                EmptyAsk(Modifier.weight(1f))
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = Dimens.screenPad, vertical = 12.dp),
-                    // Pack the thread to the bottom (chat feel) when it doesn't fill the screen;
-                    // longer threads simply scroll.
-                    verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
-                ) {
-                    items(messages.size) { idx ->
-                        val m = messages[idx]
-                        when (m.role) {
-                            AskRole.User -> UserBubble(m.text)
-                            AskRole.Assistant -> AssistantBubble(m, chainKeys, onOpen)
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                // Empty hint crossfades into the thread on the first message.
+                Crossfade(targetState = messages.isEmpty(), label = "askBody") { empty ->
+                    if (empty) {
+                        EmptyAsk(Modifier.fillMaxSize())
+                    } else {
+                        // reverseLayout: newest sits at the bottom and the list stays anchored there,
+                        // so adding a turn never re-lays-out the whole stack. Stable id keys let
+                        // animateItem fade each new bubble in and glide the rest up.
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                            reverseLayout = true,
+                            contentPadding = PaddingValues(horizontal = Dimens.screenPad, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            items(
+                                count = messages.size,
+                                key = { i -> messages[messages.lastIndex - i].id },
+                            ) { i ->
+                                val m = messages[messages.lastIndex - i]
+                                val play = remember(m.id) { m.id !in entered }
+                                // animateItem handles only reflow of existing bubbles; the entrance
+                                // (scale + fade "pop") is owned by BubbleEntrance so both sent and
+                                // received bubbles animate in the same way, once each.
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .animateItem(fadeInSpec = null, fadeOutSpec = null)
+                                ) {
+                                    BubbleEntrance(play = play, onEntered = { entered.add(m.id) }) {
+                                        when (m.role) {
+                                            AskRole.User -> UserBubble(m.text)
+                                            AskRole.Assistant -> AssistantBubble(m, chainKeys, onOpen)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -148,10 +196,35 @@ fun AskScreen(
                 busy = busy,
                 onSend = {
                     val q = draft.trim()
-                    if (q.length >= 3) { onSend(q); draft = "" }
+                    if (q.length >= 3) {
+                        onSend(q)
+                        draft = ""
+                        focusManager.clearFocus() // drop focus + dismiss the keyboard on send
+                        keyboard?.hide()
+                    }
                 },
             )
         }
+    }
+}
+
+/**
+ * Plays a scale + fade "pop" the first time a bubble appears (sent or received), then stays put.
+ * [play] is false for bubbles that already entered (e.g. after switching tabs and back), so the
+ * animation fires exactly once per turn.
+ */
+@Composable
+private fun BubbleEntrance(play: Boolean, onEntered: () -> Unit, content: @Composable () -> Unit) {
+    val state = remember { MutableTransitionState(initialState = !play) }
+    LaunchedEffect(Unit) {
+        state.targetState = true
+        onEntered()
+    }
+    AnimatedVisibility(
+        visibleState = state,
+        enter = fadeIn(tween(220)) + scaleIn(initialScale = 0.9f, animationSpec = tween(240)),
+    ) {
+        content()
     }
 }
 
@@ -183,53 +256,83 @@ private fun AssistantBubble(
         Surface(
             shape = RoundedCornerShape(18.dp, 18.dp, 18.dp, 4.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            modifier = Modifier.widthIn(max = 320.dp),
+            modifier = Modifier
+                .widthIn(max = 320.dp)
+                .animateContentSize(spring(stiffness = Spring.StiffnessMediumLow)),
         ) {
-            if (m.pending) {
-                Row(
-                    Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(14.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        m.text,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            // Crossfade the "typing" indicator into the answer; the bubble grows into place.
+            AnimatedContent(
+                targetState = m.pending,
+                transitionSpec = {
+                    (fadeIn(tween(240)) + scaleIn(initialScale = 0.94f, animationSpec = tween(240)))
+                        .togetherWith(fadeOut(tween(120)))
+                },
+                label = "askBubble",
+            ) { pending ->
+                if (pending) {
+                    TypingDots(Modifier.padding(horizontal = 16.dp, vertical = 16.dp))
+                } else {
+                    SelectionContainer {
+                        Text(
+                            m.text,
+                            modifier = Modifier.padding(14.dp),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (m.error) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
                 }
-            } else {
-                SelectionContainer {
-                    Text(
-                        m.text,
-                        modifier = Modifier.padding(14.dp),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = if (m.error) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurface,
+            }
+        }
+        AnimatedVisibility(
+            visible = m.sources.isNotEmpty(),
+            enter = fadeIn(tween(300)) + expandVertically(tween(300)),
+        ) {
+            Column {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "From your notes",
+                    modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                m.sources.forEach { t ->
+                    TranscriptCard(
+                        t,
+                        chained = t.key in chainKeys,
+                        onClick = { onOpen(t) },
+                        modifier = Modifier.padding(bottom = 8.dp),
                     )
                 }
             }
         }
-        if (m.sources.isNotEmpty()) {
-            Spacer(Modifier.height(10.dp))
-            Text(
-                "From your notes",
-                modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+    }
+}
+
+/** Three staggered fading dots — the assistant's "typing" indicator while an answer is generated. */
+@Composable
+private fun TypingDots(modifier: Modifier = Modifier) {
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+    val transition = rememberInfiniteTransition(label = "typing")
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        repeat(3) { i ->
+            val a by transition.animateFloat(
+                initialValue = 0.25f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(520, delayMillis = i * 160, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse,
+                ),
+                label = "dot$i",
             )
-            m.sources.forEach { t ->
-                TranscriptCard(
-                    t,
-                    chained = t.key in chainKeys,
-                    onClick = { onOpen(t) },
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
-            }
+            Box(
+                Modifier
+                    .padding(horizontal = 3.dp)
+                    .size(8.dp)
+                    .alpha(a)
+                    .clip(CircleShape)
+                    .background(color)
+            )
         }
     }
 }

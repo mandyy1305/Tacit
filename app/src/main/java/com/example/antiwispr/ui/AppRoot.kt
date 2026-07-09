@@ -9,6 +9,9 @@ import android.os.Environment
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -47,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -94,6 +98,39 @@ private enum class Tab(val route: String, val label: String, val icon: ImageVect
 }
 
 private val TAB_ROUTES = Tab.entries.map { it.route }.toSet()
+
+private const val TAB_ANIM_MS = 300
+
+/** Left-to-right position of a tab (for choosing slide direction); -1 for non-tab routes. */
+private fun tabIndex(route: String?): Int = when (route) {
+    Tab.Home.route -> 0
+    Tab.Library.route -> 1
+    Tab.Ask.route -> 2
+    else -> -1
+}
+
+/**
+ * Directional slide for tab-to-tab moves, matching the bottom bar's left-to-right order: going to
+ * a tab further right slides content leftward, and vice-versa. Returns null when either end isn't a
+ * tab (so detail push/pop keeps its own drill-down transition).
+ */
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.tabEnter(): EnterTransition? {
+    val from = tabIndex(initialState.destination.route)
+    val to = tabIndex(targetState.destination.route)
+    if (from < 0 || to < 0) return null
+    val dir = if (to >= from) AnimatedContentTransitionScope.SlideDirection.Left
+    else AnimatedContentTransitionScope.SlideDirection.Right
+    return slideIntoContainer(dir, tween(TAB_ANIM_MS, easing = FastOutSlowInEasing)) + fadeIn(tween(220))
+}
+
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.tabExit(): ExitTransition? {
+    val from = tabIndex(initialState.destination.route)
+    val to = tabIndex(targetState.destination.route)
+    if (from < 0 || to < 0) return null
+    val dir = if (to >= from) AnimatedContentTransitionScope.SlideDirection.Left
+    else AnimatedContentTransitionScope.SlideDirection.Right
+    return slideOutOfContainer(dir, tween(TAB_ANIM_MS, easing = FastOutSlowInEasing)) + fadeOut(tween(220))
+}
 
 @Composable
 fun AppRoot(vm: AppViewModel = viewModel()) {
@@ -252,16 +289,19 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 // (ime − bar), not (ime + bar) — otherwise the keyboard leaves a bar-sized gap.
                 .consumeWindowInsets(innerPadding)
                 .background(MaterialTheme.colorScheme.background),
-            // Detail screens slide in (drill-down); tabs crossfade (see per-tab overrides).
+            // Tabs slide horizontally in bottom-bar order (tabEnter/tabExit); detail screens keep
+            // the drill-down slide.
             enterTransition = {
-                fadeIn(tween(240)) + slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { it / 10 }
+                tabEnter() ?: (fadeIn(tween(240)) + slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { it / 10 })
             },
-            exitTransition = { fadeOut(tween(120)) },
+            exitTransition = {
+                tabExit() ?: fadeOut(tween(120))
+            },
             popEnterTransition = {
-                fadeIn(tween(240)) + slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { -it / 10 }
+                tabEnter() ?: (fadeIn(tween(240)) + slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { -it / 10 })
             },
             popExitTransition = {
-                fadeOut(tween(120)) + slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { it / 10 }
+                tabExit() ?: (fadeOut(tween(120)) + slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { it / 10 })
             },
         ) {
             composable("onboarding") {
@@ -274,13 +314,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                     },
                 )
             }
-            composable(
-                "home",
-                enterTransition = { fadeIn(tween(180)) },
-                exitTransition = { fadeOut(tween(140)) },
-                popEnterTransition = { fadeIn(tween(180)) },
-                popExitTransition = { fadeOut(tween(140)) },
-            ) {
+            composable("home") {
                 HomeScreen(
                     setup = setup,
                     recents = recents,
@@ -292,13 +326,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                     onFinishSetup = { nav.navigate("onboarding") },
                 )
             }
-            composable(
-                "library",
-                enterTransition = { fadeIn(tween(180)) },
-                exitTransition = { fadeOut(tween(140)) },
-                popEnterTransition = { fadeIn(tween(180)) },
-                popExitTransition = { fadeOut(tween(140)) },
-            ) {
+            composable("library") {
                 LibraryScreen(
                     library = history,
                     chainKeys = chainKeys,
@@ -309,16 +337,11 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                     onCommitDelete = { vm.commitPendingDeletes() },
                 )
             }
-            composable(
-                "ask",
-                enterTransition = { fadeIn(tween(180)) },
-                exitTransition = { fadeOut(tween(140)) },
-                popEnterTransition = { fadeIn(tween(180)) },
-                popExitTransition = { fadeOut(tween(140)) },
-            ) {
+            composable("ask") {
                 AskScreen(
                     messages = vm.askMessages,
                     busy = vm.askBusy,
+                    entered = vm.askEntered,
                     chainKeys = chainKeys,
                     onSend = { vm.ask(it) },
                     onClear = { vm.clearAsk() },

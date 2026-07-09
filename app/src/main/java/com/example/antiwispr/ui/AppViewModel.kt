@@ -133,9 +133,11 @@ enum class SetupHealth { OFF, NEEDS_SETUP, ATTENTION, GETTING_READY, READY }
 
 enum class AskRole { User, Assistant }
 
-/** One turn in the Ask tab's chat thread. Assistant turns may carry the notes the answer
- *  was drawn from (rendered as source cards) and a [pending] flag while the model works. */
+/** One turn in the Ask tab's chat thread. [id] is stable across the pending→answer swap so the
+ *  list animates it in place. Assistant turns may carry the notes the answer was drawn from
+ *  (rendered as source cards) and a [pending] flag while the model works. */
 data class AskMessage(
+    val id: Long,
     val role: AskRole,
     val text: String,
     val sources: List<StoredTranscript> = emptyList(),
@@ -179,6 +181,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** The Ask tab's chat thread. Hoisted here (not screen-local) so it survives tab switches
      *  and recomposition; each turn is answered independently from the note library. */
     val askMessages = mutableStateListOf<AskMessage>()
+    private var nextAskId = 0L
+
+    /** Ids of chat turns whose entrance animation has already played, so switching tabs and coming
+     *  back doesn't replay it. Lives here (not screen-local) to survive the tab's disposal. */
+    val askEntered = HashSet<Long>()
 
     /** True while an Ask answer is being retrieved + generated (composer disabled meanwhile). */
     var askBusy by mutableStateOf(false)
@@ -552,9 +559,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val q = input.trim()
         if (q.length < 3 || askBusy) return
         val ctx = getApplication<Application>().applicationContext
-        askMessages.add(AskMessage(AskRole.User, q))
+        askMessages.add(AskMessage(id = nextAskId++, role = AskRole.User, text = q))
+        val replyId = nextAskId++ // stable across every update to this assistant turn
         val slot = askMessages.size
-        askMessages.add(AskMessage(AskRole.Assistant, "Finding the right notes…", pending = true))
+        askMessages.add(AskMessage(id = replyId, role = AskRole.Assistant, text = "Finding the right notes…", pending = true))
         askBusy = true
         viewModelScope.launch {
             val hits = withContext(Dispatchers.Default) {
@@ -563,21 +571,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (slot < askMessages.size) {
                 val n = hits.size
                 askMessages[slot] = AskMessage(
-                    AskRole.Assistant,
-                    "Reading $n note${if (n == 1) "" else "s"}…",
+                    id = replyId,
+                    role = AskRole.Assistant,
+                    text = "Reading $n note${if (n == 1) "" else "s"}…",
                     pending = true,
                 )
             }
             val raw = withContext(Dispatchers.IO) { Summarizer.askBlocking(ctx, q, hits) }
             val answer = if (raw.startsWith("[")) {
-                AskMessage(AskRole.Assistant, raw.trim('[', ']'), error = true)
+                AskMessage(id = replyId, role = AskRole.Assistant, text = raw.trim('[', ']'), error = true)
             } else {
                 val parsed = parseAskAnswer(raw)
                 // Show ONLY the notes the model actually cited. No fallback to "all retrieved" —
                 // a negative answer ("SOURCES: none") must show no source cards, not the whole pile.
                 val cited = parsed.sources.mapNotNull { hits.getOrNull(it - 1)?.transcript }
                     .distinctBy { it.key }
-                AskMessage(AskRole.Assistant, parsed.answer, sources = cited)
+                AskMessage(id = replyId, role = AskRole.Assistant, text = parsed.answer, sources = cited)
             }
             if (slot < askMessages.size) askMessages[slot] = answer
             askBusy = false
@@ -587,6 +596,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun clearAsk() {
         if (askBusy) return
         askMessages.clear()
+        askEntered.clear()
     }
 
     // ---- checks (ported verbatim from the old MainActivity) ------------------------
