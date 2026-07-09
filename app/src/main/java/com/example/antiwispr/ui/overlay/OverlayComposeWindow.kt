@@ -159,7 +159,11 @@ class OverlayComposeWindow(
         PixelFormat.TRANSLUCENT
     ).apply {
         gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-        y = dp(78)
+        // The card is pinned ~90 dp down (78 dp base + the 12 dp frame bleed). The Compose content
+        // now reserves a 48 dp transparent coach-mark lane ABOVE the card (for floating tooltips
+        // that must not clip or cover content), so shift the window up by that lane to keep the
+        // visible card exactly where it was: 78 - 48 = 30. Keep in sync with COACH_ROOM in OverlayCard.
+        y = dp(30)
     }
 
     private fun flagsFor(touchable: Boolean): Int {

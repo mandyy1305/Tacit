@@ -6,9 +6,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.StartOffset
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -18,7 +16,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import android.content.ClipData
@@ -29,11 +29,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -56,10 +58,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -70,6 +74,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -81,13 +86,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.antiwispr.ActionEntity
 import com.example.antiwispr.EntityExtractor
+import com.example.antiwispr.Toggles
 import com.example.antiwispr.ui.components.TacitIcons
-import com.example.antiwispr.ui.theme.Fraunces
 import com.example.antiwispr.ui.theme.Inter
 import com.example.antiwispr.ui.theme.TacitTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.pow
+import kotlin.math.sin
+import kotlin.math.tanh
 
 /**
  * The overlay is ALWAYS dark-glass — it floats over WhatsApp's green/dark chrome,
@@ -114,15 +125,14 @@ fun TacitOverlayTheme(content: @Composable () -> Unit) {
 @Composable
 fun TacitOverlayCard(
     state: OverlayUiState,
+    audioLevels: List<Float> = emptyList(),
     onClose: () -> Unit,
     onShare: () -> Unit,
     onCopy: (String) -> Unit,
     onToggleChain: (Boolean) -> Unit = {},
+    onPartVisible: (Int) -> Unit = {},
     onRequestSummary: () -> Unit = {},
     onEntityTap: (ActionEntity) -> Unit = {},
-    onCommitCandidate: (Int) -> Unit = {},
-    onNoneOfThese: () -> Unit = {},
-    onWrongNote: () -> Unit = {},
     onNoticeAction: (NoticeAction) -> Unit = {},
     onListenAgain: () -> Unit = {},
     onExitFinished: () -> Unit,
@@ -131,15 +141,6 @@ fun TacitOverlayCard(
     enterState.targetState = state.visible
     LaunchedEffect(enterState.currentState, enterState.targetState) {
         if (!enterState.currentState && !enterState.targetState) onExitFinished()
-    }
-
-    // One-shot amber wash when the match lands.
-    val flash = remember { Animatable(0f) }
-    LaunchedEffect(state.phase) {
-        if (state.phase == OverlayPhase.MATCHED) {
-            flash.snapTo(0.22f)
-            flash.animateTo(0f, tween(700))
-        }
     }
 
     AnimatedVisibility(
@@ -167,6 +168,47 @@ fun TacitOverlayCard(
                 onDragCancel = { dragY = 0f },
             )
         }
+        val ctx = LocalContext.current
+        // Hoisted so the top bar, transcript body, and coach-marks all agree on which chain part /
+        // view is open. Resets to the matched part when a new result lands (chainPart changes).
+        var current by remember(state.chainPart, state.chainCount) {
+            mutableIntStateOf((state.chainPart - 1).coerceAtLeast(0))
+        }
+        var hasSwiped by remember(state.chainPart, state.chainCount) { mutableStateOf(false) }
+        var view by remember(current) { mutableIntStateOf(0) } // 0 transcript, 1 summary (per note)
+        // Coach-marks: persisted show-count per tooltip. A tip shows up to [coachCap] times OR until
+        // the user does the action (count jumps to the cap) — a few reminders, never nagging forever.
+        val coachCap = 3
+        var shareCount by remember { mutableIntStateOf(Toggles.shareTipCount) }
+        var swipeCount by remember { mutableIntStateOf(Toggles.swipeTipCount) }
+        var aiCount by remember { mutableIntStateOf(Toggles.aiTipCount) }
+        val onShareTracked: () -> Unit = {
+            if (shareCount < coachCap) { shareCount = coachCap; Toggles.setShareTipCount(ctx, coachCap) }
+            onShare()
+        }
+        val goToPart: (Int) -> Unit = { i ->
+            val clamped = i.coerceIn(0, (state.chainCount - 1).coerceAtLeast(0))
+            if (clamped != current) {
+                current = clamped; hasSwiped = true
+                if (swipeCount < coachCap) { swipeCount = coachCap; Toggles.setSwipeTipCount(ctx, coachCap) }
+                onPartVisible(clamped)
+            }
+        }
+        val onAiUsed: () -> Unit = {
+            if (aiCount < coachCap) { aiCount = coachCap; Toggles.setAiTipCount(ctx, coachCap) }
+        }
+        // Which coach-mark is live now (gated by phase/state + the show-count cap; auto-hides).
+        val curText = if (state.chainCount > 1) state.chainParts.getOrNull(current) else state.transcript
+        val showShare = rememberCoachShown(
+            state.phase == OverlayPhase.LISTENING && state.micBanner && shareCount < coachCap,
+        ) { shareCount++; Toggles.setShareTipCount(ctx, shareCount) }
+        val showSwipe = rememberCoachShown(
+            state.phase == OverlayPhase.TRANSCRIPT && state.chainCount > 1 && !hasSwiped && swipeCount < coachCap,
+        ) { swipeCount++; Toggles.setSwipeTipCount(ctx, swipeCount) }
+        val showAi = rememberCoachShown(
+            state.phase == OverlayPhase.TRANSCRIPT && view == 0 && (curText?.length ?: 0) > 220 && aiCount < coachCap,
+        ) { aiCount++; Toggles.setAiTipCount(ctx, aiCount) }
+
         Column(
             Modifier
                 .graphicsLayer {
@@ -174,57 +216,72 @@ fun TacitOverlayCard(
                     alpha = (1f + dragY / (dismissPx * 3f)).coerceIn(0f, 1f)
                 }
                 .fillMaxWidth()
-                .heightIn(max = maxCardHeight)
-                .shadow(12.dp, corner, ambientColor = Color.Black, spotColor = Color.Black)
-                .clip(corner)
-                .background(Brush.verticalGradient(listOf(OverlayPalette.surfaceHi, OverlayPalette.surface)))
-                .drawBehind {
-                    if (flash.value > 0f) {
-                        drawRoundRect(
-                            OverlayPalette.accent.copy(alpha = flash.value),
-                            cornerRadius = CornerRadius(20.dp.toPx()),
-                        )
-                    }
-                }
-                .border(1.dp, OverlayPalette.hairline, corner)
-                .padding(18.dp)
         ) {
-            Header(onClose, dragModifier)
-
-            // Fade only — expand/shrink would animate layout height and resize the window
-            // per frame (same stutter as above).
-            AnimatedVisibility(
-                visible = state.micBanner,
-                enter = fadeIn(tween(220)),
-                exit = fadeOut(tween(150)),
-            ) {
-                MicFallbackPill(onShare)
+            // TOP coach-mark lane — transparent room ABOVE the card. Share/swipe tooltips float here
+            // (over WhatsApp, never covering the card's content); the window reserves matching room
+            // so nothing clips. Bottom-aligned so the caret sits just above the card's top edge.
+            Box(Modifier.fillMaxWidth().height(COACH_ROOM)) {
+                if (showShare) {
+                    CoachTip(
+                        "Share your screen for surer matches.",
+                        caretDown = true, caretAtStart = true,
+                        modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 3.dp),
+                    )
+                }
+                if (showSwipe) {
+                    CoachTip(
+                        "Swipe to read the next note.",
+                        caretDown = true, caretAtStart = true,
+                        modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 3.dp),
+                    )
+                }
             }
 
-            Spacer(Modifier.height(12.dp))
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = maxCardHeight)
+                    .shadow(12.dp, corner, ambientColor = Color.Black, spotColor = Color.Black)
+                    .clip(corner)
+                    .background(Brush.verticalGradient(listOf(OverlayPalette.surfaceHi, OverlayPalette.surface)))
+                    .border(1.dp, OverlayPalette.hairline, corner)
+                    .padding(18.dp)
+            ) {
+                OverlayTopBar(state, current, onClose, onShareTracked, goToPart, dragModifier)
+                Spacer(Modifier.height(12.dp))
+                // Fade only, height snaps (`using null`) — the no-window-resize-animation rule.
+                AnimatedContent(
+                    targetState = state.phase,
+                    transitionSpec = {
+                        (fadeIn(tween(260, delayMillis = 40, easing = FastOutSlowInEasing)) +
+                            slideInVertically(tween(300, easing = FastOutSlowInEasing)) { it / 14 }) togetherWith
+                            fadeOut(tween(90)) using null
+                    },
+                    label = "phase",
+                ) { phase ->
+                    when (phase) {
+                        OverlayPhase.LISTENING -> ListeningBody(state, audioLevels)
+                        OverlayPhase.MATCHED -> MatchedBody(state)
+                        OverlayPhase.TRANSCRIBING -> TranscribingBody(state)
+                        OverlayPhase.TRANSCRIPT -> TranscriptBody(
+                            state, current, view, { view = it }, goToPart, onCopy, onRequestSummary, onEntityTap, onAiUsed,
+                        )
+                        OverlayPhase.NO_MATCH -> NoMatchBody(state, onShareTracked)
+                        OverlayPhase.NOTICE -> NoticeBody(state, onNoticeAction)
+                    }
+                }
+            }
 
-            // NO size animation, on purpose. Animating layout height in a WRAP_CONTENT
-            // overlay resizes the WINDOW every frame (IPC + surface realloc) — that is the
-            // stutter, and no rendering backend fixes it. `using null` makes the card snap
-            // to its new height in a single relayout; the felt motion is fade+slide only,
-            // which is pure GPU work and never touches the window size.
-            AnimatedContent(
-                targetState = state.phase,
-                transitionSpec = {
-                    (fadeIn(tween(260, delayMillis = 40, easing = FastOutSlowInEasing)) +
-                        slideInVertically(tween(300, easing = FastOutSlowInEasing)) { it / 14 }) togetherWith
-                        fadeOut(tween(90)) using null
-                },
-                label = "phase",
-            ) { phase ->
-                when (phase) {
-                    OverlayPhase.LISTENING -> ListeningBody(state)
-                    OverlayPhase.MATCHED -> MatchedBody(state)
-                    OverlayPhase.TRANSCRIBING -> TranscribingBody(state)
-                    OverlayPhase.TRANSCRIPT -> TranscriptBody(state, onCopy, onToggleChain, onRequestSummary, onEntityTap, onWrongNote)
-                    OverlayPhase.CLOSE_MATCHES -> CloseMatchesBody(state, onCommitCandidate, onNoneOfThese)
-                    OverlayPhase.NO_MATCH -> NoMatchBody(onListenAgain, onClose)
-                    OverlayPhase.NOTICE -> NoticeBody(state, onNoticeAction)
+            // BOTTOM coach-mark lane — transparent room BELOW the card. The AI-summary tooltip floats
+            // here, under its button, so it never covers the transcript. Top-aligned so the caret
+            // sits just below the card's bottom edge.
+            Box(Modifier.fillMaxWidth().height(COACH_ROOM)) {
+                if (showAi) {
+                    CoachTip(
+                        "Long note. Tap to summarise.",
+                        caretDown = false, caretAtStart = false,
+                        modifier = Modifier.align(Alignment.TopEnd).padding(end = 8.dp, top = 3.dp),
+                    )
                 }
             }
         }
@@ -233,27 +290,35 @@ fun TacitOverlayCard(
 
 // ---- pieces ---------------------------------------------------------------------
 
+/**
+ * Pinned top row. The left slot depends on phase/state — Share-screen control (on the mic),
+ * TACIT wordmark, or the chain pager — with the close button always on the right. Height is pinned
+ * so swapping slots never resizes the window. Carries the swipe-up-to-dismiss [dragModifier].
+ */
 @Composable
-private fun Header(onClose: () -> Unit, dragModifier: Modifier = Modifier) {
-    Row(dragModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                "TACIT",
-                fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-                fontSize = 10.sp, letterSpacing = 2.sp,
-                color = OverlayPalette.accent,
-            )
-            Text(
-                "Voice note",
-                fontFamily = Fraunces, fontWeight = FontWeight.SemiBold,
-                fontSize = 17.sp, color = OverlayPalette.ink,
-            )
+private fun OverlayTopBar(
+    state: OverlayUiState,
+    current: Int,
+    onClose: () -> Unit,
+    onShare: () -> Unit,
+    onGoToPart: (Int) -> Unit,
+    dragModifier: Modifier,
+) {
+    val listening = state.phase == OverlayPhase.LISTENING
+    val chain = state.chainCount > 1 && !listening
+    Row(
+        dragModifier.fillMaxWidth().defaultMinSize(minHeight = 30.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            when {
+                listening && state.micBanner -> ShareScreenControl(onShare)
+                chain -> ChainPager(state.chainCount, current, state.chainParts, onGoToPart)
+                else -> BrandWordmark()
+            }
         }
         Box(
-            Modifier
-                .size(32.dp)
-                .clip(CircleShape)
-                .clickable(onClick = onClose),
+            Modifier.size(32.dp).clip(CircleShape).clickable(onClick = onClose),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -264,69 +329,226 @@ private fun Header(onClose: () -> Unit, dragModifier: Modifier = Modifier) {
     }
 }
 
+private val COACH_TIP_BG = Color(0xFF2A241C)
+
+/** Transparent lane reserved above and below the card for floating coach-marks. The window carries
+ *  matching room (OverlayComposeWindow.y is shifted up by this), so tooltips never clip. */
+private val COACH_ROOM = 48.dp
+
+/** Little triangle that connects a coach-mark to its anchor. [up] points up (bubble is below the
+ *  anchor); [atStart] keeps it near the left, else near the right. */
 @Composable
-private fun MicFallbackPill(onShare: () -> Unit) {
+private fun Caret(up: Boolean, atStart: Boolean) {
+    Canvas(
+        Modifier
+            .padding(start = if (atStart) 16.dp else 0.dp, end = if (!atStart) 16.dp else 0.dp)
+            .width(12.dp).height(6.dp)
+    ) {
+        val w = size.width; val h = size.height
+        val p = Path().apply {
+            if (up) { moveTo(0f, h); lineTo(w, h); lineTo(w / 2f, 0f) }
+            else { moveTo(0f, 0f); lineTo(w, 0f); lineTo(w / 2f, h) }
+            close()
+        }
+        drawPath(p, COACH_TIP_BG)
+    }
+}
+
+/** A coach-mark bubble (shadow + border + a caret pointing at its anchor) — a real tooltip. The
+ *  column wraps to the bubble width; the caret aligns to whichever edge sits over the anchor. */
+@Composable
+private fun CoachTip(text: String, caretDown: Boolean, caretAtStart: Boolean, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = if (caretAtStart) Alignment.Start else Alignment.End) {
+        if (!caretDown) Caret(up = true, atStart = caretAtStart)
+        Text(
+            text,
+            Modifier
+                .shadow(6.dp, RoundedCornerShape(9.dp))
+                .clip(RoundedCornerShape(9.dp))
+                .background(COACH_TIP_BG)
+                .border(1.dp, OverlayPalette.hairline, RoundedCornerShape(9.dp))
+                .padding(horizontal = 11.dp, vertical = 7.dp),
+            fontFamily = Inter, fontSize = 11.sp, lineHeight = 15.sp,
+            color = OverlayPalette.ink,
+        )
+        if (caretDown) Caret(up = false, atStart = caretAtStart)
+    }
+}
+
+/** True while a coach-mark should show: appears when [active] becomes true, auto-hides after a few
+ *  seconds (then [onShown] counts the completed appearance), and vanishes immediately if [active]
+ *  goes false first (the user acted, or the phase changed). */
+@Composable
+private fun rememberCoachShown(active: Boolean, onShown: () -> Unit): Boolean {
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(active) {
+        if (active) { shown = true; delay(4500); shown = false; onShown() } else shown = false
+    }
+    return shown
+}
+
+/** CHAIN wordlet for the result footer (chain-link glyph + burst size). */
+@Composable
+private fun ChainBadge(count: Int) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(TacitIcons.Chain, contentDescription = null, modifier = Modifier.size(13.dp), tint = OverlayPalette.inkMuted)
+        Spacer(Modifier.width(4.dp))
+        Text(
+            "CHAIN · $count",
+            fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+            fontSize = 10.sp, letterSpacing = 1.sp, color = OverlayPalette.inkMuted,
+        )
+    }
+}
+
+/** App wordmark used in the top-left when there's no pager or share control to show. */
+@Composable
+private fun BrandWordmark() {
+    Text(
+        "TACIT",
+        fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+        fontSize = 13.sp, letterSpacing = 1.6.sp,
+        color = OverlayPalette.accent,
+    )
+}
+
+/** Screen-share control (top-left, mic fallback only): the old banner condensed to one tap. */
+@Composable
+private fun ShareScreenControl(onShare: () -> Unit) {
     Row(
         Modifier
-            .padding(top = 12.dp)
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(OverlayPalette.accent.copy(alpha = 0.12f))
-            .border(1.dp, OverlayPalette.accent.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onShare)
+            .padding(vertical = 4.dp, horizontal = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                "Using the mic for this one.",
-                fontFamily = Inter, fontWeight = FontWeight.Medium,
-                fontSize = 13.sp, color = OverlayPalette.ink,
-            )
-            Text(
-                "Screen share hears notes directly. Surer matches.",
-                fontFamily = Inter, fontSize = 11.sp,
-                color = OverlayPalette.inkMuted,
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        Box(
-            Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(OverlayPalette.accentDeep)
-                .clickable(onClick = onShare)
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-        ) {
-            Text(
-                "Share screen",
-                fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-                fontSize = 12.sp, color = Color(0xFFFFF3E9),
+        Icon(TacitIcons.ScreenShare, contentDescription = null, tint = OverlayPalette.accent, modifier = Modifier.size(17.dp))
+        Spacer(Modifier.width(7.dp))
+        Text(
+            "Share screen",
+            fontFamily = Inter, fontWeight = FontWeight.Medium,
+            fontSize = 13.sp, color = OverlayPalette.accent,
+        )
+    }
+}
+
+/** Instagram-stories pager over the chain: the open note is an amber bar, transcribed notes are
+ *  filled dots, notes not read yet are faint dots. Tap a node to jump. */
+@Composable
+private fun ChainPager(count: Int, current: Int, parts: List<String?>, onGoToPart: (Int) -> Unit) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (i in 0 until count) {
+            val isCur = i == current
+            val transcribed = parts.getOrNull(i) != null
+            Box(
+                Modifier
+                    .height(6.dp)
+                    .width(if (isCur) 22.dp else 6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(
+                        when {
+                            isCur -> OverlayPalette.accent
+                            transcribed -> OverlayPalette.accent.copy(alpha = 0.6f)
+                            else -> OverlayPalette.inkFaint
+                        }
+                    )
+                    .clickable { onGoToPart(i) },
             )
         }
     }
 }
 
-/** Five amber bars breathing in a staggered wave — the listening motif. */
+private fun smoothstep(e0: Float, e1: Float, x: Float): Float {
+    val t = ((x - e0) / (e1 - e0)).coerceIn(0f, 1f)
+    return t * t * (3f - 2f * t)
+}
+
+/** Frame-rate-independent asymmetric follower: chases a rising target fast, a falling one slowly. */
+private fun follow(cur: Float, target: Float, dt: Float, tauA: Float, tauR: Float): Float {
+    val tau = if (target > cur) tauA else tauR
+    return cur + (target - cur) * (1f - exp(-dt / tau))
+}
+
+/** Fixed Gaussian lens: 1 at the centre bar, tapering to [sMin] at the edges. */
+private fun lensWeight(i: Int, n: Int, sigma: Float, sMin: Float): Float {
+    val c = (n - 1) / 2f
+    return sMin + (1f - sMin) * exp(-((i - c) * (i - c)) / (2f * sigma * sigma))
+}
+
+/**
+ * Live listening meter — "Center-Out Bloom" (tuned in the waveform lab). The raw ~10 Hz capture
+ * amplitude is conditioned (soft gate → falling-peak AGC → gamma → soft-knee) into a level L,
+ * injected at the centre bar and diffused OUTWARD through an overshoot-free one-pole cascade, then
+ * shaped by a fixed Gaussian lens. Rises fast (70 ms) and falls slowly (400 ms), and settles to a
+ * centred row of gently breathing dots. A withFrameNanos loop drives it at display rate so the
+ * 10 Hz feed animates buttery-smooth. Stationary bars; no scrolling.
+ */
 @Composable
-private fun ListeningBars(modifier: Modifier = Modifier) {
-    val t = rememberInfiniteTransition(label = "eq")
-    val bars = List(5) { i ->
-        t.animateFloat(
-            initialValue = 0.22f, targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                tween(420, easing = FastOutSlowInEasing),
-                RepeatMode.Reverse,
-                initialStartOffset = StartOffset(i * 90),
-            ),
-            label = "bar$i",
-        )
+private fun ListeningWaveform(levels: List<Float>, modifier: Modifier = Modifier) {
+    val n = 31
+    val c = (n - 1) / 2
+    val ring = remember { FloatArray(c + 1) }   // cascade level per distance-from-centre
+    val agc = remember { floatArrayOf(0f) }     // falling-peak AGC state
+    var tick by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) {
+        var last = 0L
+        while (true) {
+            withFrameNanos { now ->
+                val dt = if (last == 0L) 0.016f else ((now - last) / 1_000_000_000f).coerceIn(0f, 0.05f)
+                last = now
+                val a = levels.lastOrNull() ?: 0f                      // latest raw RMS (held between pushes)
+                // conditioning — calibrated to the phone's real capture scale (measured on-device:
+                // speech RMS ~0.007–0.11, silence/pauses <0.003). The lab's laptop-mic scale ran
+                // ~5–10x hotter, which is why its 0.02 gate flat-lined normal-volume speech here.
+                val floor = 0.0025f
+                val gate = smoothstep(floor, 0.007f, a)               // open by ~0.007 so normal speech shows
+                agc[0] = maxOf(a, agc[0] - 0.10f * dt)                // gentle AGC: soft + loud both fill
+                val aRef = maxOf(0.015f, agc[0])                      // low reference so quiet speech normalizes up
+                val p = ((a - floor) / (aRef - floor)).coerceIn(0f, 1f)
+                var lc = p.pow(0.60f)                                  // gamma — gentle onset
+                if (lc > 0.75f) lc = 0.75f + 0.25f * tanh((lc - 0.75f) / 0.25f)  // soft-knee ceiling
+                val level = gate * lc
+                // centre-out cascade: master follower at the centre, diffusing outward 60 ms/ring
+                ring[0] = follow(ring[0], level, dt, 0.070f, 0.400f)
+                for (d in 1..c) ring[d] += (ring[d - 1] - ring[d]) * (1f - exp(-dt / 0.060f))
+                tick = now                                            // drive the redraw
+            }
+        }
     }
-    Canvas(modifier.width(34.dp).height(20.dp)) {
-        val bw = size.width / 9f // 5 bars + 4 gaps
-        bars.forEachIndexed { i, f ->
-            val h = size.height * f.value
+    Canvas(modifier.fillMaxWidth().height(46.dp)) {
+        val t = tick / 1_000_000_000f                                 // observed read → redraw each frame
+        val bw = 4.dp.toPx(); val gap = 4.dp.toPx()
+        val clusterW = n * bw + (n - 1) * gap
+        val x0 = (size.width - clusterW) / 2f
+        val cy = size.height / 2f
+        val dot = bw
+        val maxH = size.height * 0.92f
+        val sigma = n * 0.40f
+        // faint warm bloom behind the centre, following the centre level
+        val centre = ring[0]
+        if (centre > 0.02f) {
+            drawRect(
+                Brush.radialGradient(
+                    colors = listOf(OverlayPalette.accent.copy(alpha = 0.18f * centre), Color.Transparent),
+                    center = Offset(size.width / 2f, cy),
+                    radius = size.width * 0.42f,
+                )
+            )
+        }
+        for (i in 0 until n) {
+            val d = abs(i - c)
+            val w = lensWeight(i, n, sigma, 0.15f)
+            val act = (ring[d] * w).coerceIn(0f, 1f)
+            val idle = 0.10f * dot * sin(t * 2f * PI.toFloat() * 0.25f + i * 0.3f)
+            val shim = 1f + 0.12f * act * sin(t * 1.5f + i * 0.5f)
+            var h = dot + act * (maxH - dot) * shim + idle
+            if (h < dot) h = dot
             drawRoundRect(
                 OverlayPalette.accent,
-                topLeft = Offset(i * 2 * bw, (size.height - h) / 2f),
+                topLeft = Offset(x0 + i * (bw + gap), cy - h / 2f),
                 size = Size(bw, h),
                 cornerRadius = CornerRadius(bw / 2f),
             )
@@ -335,10 +557,10 @@ private fun ListeningBars(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ListeningBody(state: OverlayUiState) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        ListeningBars()
-        Spacer(Modifier.width(14.dp))
+private fun ListeningBody(state: OverlayUiState, audioLevels: List<Float>) {
+    Column {
+        ListeningWaveform(audioLevels)
+        Spacer(Modifier.height(8.dp))
         AnimatedContent(
             targetState = state.statusLine,
             transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(100)) },
@@ -346,7 +568,7 @@ private fun ListeningBody(state: OverlayUiState) {
         ) { line ->
             Text(
                 line,
-                fontFamily = Inter, fontSize = 14.sp,
+                fontFamily = Inter, fontSize = 13.sp,
                 color = if (state.statusWarn) OverlayPalette.accent else OverlayPalette.inkMuted,
             )
         }
@@ -490,178 +712,157 @@ private fun TranscribingShimmer() {
 @Composable
 private fun TranscriptBody(
     state: OverlayUiState,
+    current: Int,
+    view: Int,
+    onViewChange: (Int) -> Unit,
+    onGoToPart: (Int) -> Unit,
     onCopy: (String) -> Unit,
-    onToggleChain: (Boolean) -> Unit,
     onRequestSummary: () -> Unit,
     onEntityTap: (ActionEntity) -> Unit,
-    onWrongNote: () -> Unit,
+    onAiUsed: () -> Unit,
 ) {
-    // 0 = Transcript (default — instantly available), 1 = Summary (generated lazily the
-    // first time the user opens it).
-    var tab by remember { mutableIntStateOf(0) }
+    val isChain = state.chainCount > 1
+    val partText = if (isChain) state.chainParts.getOrNull(current) else state.transcript
     Column {
-        MatchLine(state, animateBadge = false)
-        if (state.chainCount > 1) {
-            Spacer(Modifier.height(8.dp))
-            ChainTogglePill(state, onToggleChain)
+        // Hero. Slides horizontally when the open chain part changes (swipe direction), and fades
+        // when toggling transcript<->summary. Height snaps (`using null`) — no window resize.
+        AnimatedContent(
+            targetState = current to view,
+            modifier = Modifier.weight(1f, fill = false),
+            transitionSpec = {
+                if (initialState.first != targetState.first) {
+                    val fwd = targetState.first > initialState.first
+                    (slideInHorizontally(tween(240)) { w -> if (fwd) w else -w } + fadeIn(tween(240))) togetherWith
+                        (slideOutHorizontally(tween(200)) { w -> if (fwd) -w else w } + fadeOut(tween(140))) using null
+                } else {
+                    (fadeIn(tween(180)) togetherWith fadeOut(tween(90))) using null
+                }
+            },
+            label = "note",
+        ) { (cur, v) ->
+            val txt = if (isChain) state.chainParts.getOrNull(cur) else state.transcript
+            Box(Modifier.verticalScroll(rememberScrollState())) {
+                if (v == 0) TranscriptHero(txt, cur, isChain, onCopy, onGoToPart)
+                else SummaryPane(state, onEntityTap)
+            }
         }
         Spacer(Modifier.height(12.dp))
-        OverlayTabs(tab, onSelect = { i ->
-            tab = i
-            // Lazy summaries: the first open of the Summary tab starts generation. NONE =
-            // idle (Orchestrator armed a pending request); READY/UNAVAILABLE/GENERATING
-            // never re-fire, and the state flips to GENERATING synchronously on this tap.
-            if (i == 1 && state.summaryState == SummaryState.NONE) onRequestSummary()
-        })
-        Spacer(Modifier.height(10.dp))
-        // Fade only, size snaps (`using null`) — the no-window-resize-animation rule.
-        AnimatedContent(
-            targetState = tab,
-            modifier = Modifier.weight(1f, fill = false),
-            transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(90)) using null },
-            label = "tab",
-        ) { t ->
-            Box(Modifier.verticalScroll(rememberScrollState())) {
-                if (t == 0) TranscriptPane(state) else SummaryPane(state, onEntityTap)
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        val copyText = when {
-            tab == 1 -> state.summaryRaw.orEmpty()
-            state.chainMode && state.chainParts.any { it != null } ->
-                state.chainParts.mapIndexedNotNull { i, t -> t?.let { "Part ${i + 1}: $it" } }
-                    .joinToString("\n\n")
-            else -> state.transcript.orEmpty()
-        }
-        if (copyText.isNotBlank()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                SourceMark(state.source)
-                if (state.candidates.size > 1) {
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        "Wrong note?",
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable { onWrongNote() }
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
-                        fontFamily = Inter, fontSize = 11.sp,
-                        color = OverlayPalette.inkMuted,
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { onCopy(copyText) }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                ) {
-                    AnimatedContent(
-                        targetState = state.copied,
-                        transitionSpec = { fadeIn(tween(120)) togetherWith fadeOut(tween(80)) },
-                        label = "copy",
-                    ) { copied ->
-                        Text(
-                            if (copied) "COPIED ✓" else "COPY",
-                            fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-                            fontSize = 12.sp, letterSpacing = 1.sp,
-                            color = if (copied) OverlayPalette.mint else OverlayPalette.accent,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun OverlayTabs(selected: Int, onSelect: (Int) -> Unit) {
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(OverlayPalette.ink.copy(alpha = 0.06f))
-            .padding(3.dp)
-    ) {
-        listOf("Transcript", "Summary").forEachIndexed { i, label ->
-            val active = i == selected
-            Box(
-                Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (active) OverlayPalette.accentDeep else Color.Transparent)
-                    .clickable { onSelect(i) }
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-            ) {
+        // Footer: provenance (+ CHAIN badge) on the left, AI-summary toggle on the right.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // Copy confirmation is a quiet text swap (no background colour shift).
+            if (state.copied) {
                 Text(
-                    label,
-                    fontFamily = Inter,
-                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
-                    fontSize = 12.sp,
-                    color = if (active) Color(0xFFFFF3E9) else OverlayPalette.inkMuted,
+                    "COPIED ✓",
+                    fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+                    fontSize = 10.sp, letterSpacing = 1.sp,
+                    color = OverlayPalette.mint,
                 )
+            } else {
+                SourceMark(state.source)
+                if (isChain) {
+                    Spacer(Modifier.width(10.dp))
+                    ChainBadge(state.chainCount)
+                }
             }
+            Spacer(Modifier.weight(1f))
+            AISummaryButton(
+                active = view == 1,
+                nudge = view == 0 && (partText?.length ?: 0) > 220,
+                onClick = {
+                    if (view == 0) {
+                        onViewChange(1)
+                        onAiUsed()
+                        // Lazy: first open with nothing armed kicks generation for THIS note.
+                        if (state.summaryState == SummaryState.NONE) onRequestSummary()
+                    } else {
+                        onViewChange(0)
+                    }
+                },
+            )
         }
     }
 }
 
-/** "Transcribe all N" toggle — flips the card between this-note and whole-burst content. */
+/** The transcript hero. Tap to copy; horizontal swipe moves across a chain. A null part is the
+ *  lazy "transcribing this note" state; a bracket string is a per-part notice. */
 @Composable
-private fun ChainTogglePill(state: OverlayUiState, onToggleChain: (Boolean) -> Unit) {
-    val on = state.chainMode
+private fun TranscriptHero(
+    text: String?,
+    current: Int,
+    isChain: Boolean,
+    onCopy: (String) -> Unit,
+    onGoToPart: (Int) -> Unit,
+) {
+    if (text == null) {
+        Column {
+            TranscribingShimmer()
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Transcribing note ${current + 1}…",
+                fontFamily = Inter, fontSize = 11.sp,
+                color = OverlayPalette.inkFaint,
+            )
+        }
+        return
+    }
+    if (text.startsWith("[")) {
+        Text(
+            humanizeNotice(text),
+            fontFamily = Inter, fontSize = 13.sp,
+            color = OverlayPalette.inkMuted,
+        )
+        return
+    }
+    val swipe = if (isChain) {
+        Modifier.pointerInput(current) {
+            var dx = 0f
+            detectHorizontalDragGestures(
+                onDragStart = { dx = 0f },
+                onHorizontalDrag = { _, d -> dx += d },
+                onDragEnd = {
+                    val threshold = 48.dp.toPx()
+                    when {
+                        dx <= -threshold -> onGoToPart(current + 1)
+                        dx >= threshold -> onGoToPart(current - 1)
+                    }
+                },
+            )
+        }
+    } else Modifier
+    Text(
+        text,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCopy(text) }
+            .then(swipe)
+            .padding(vertical = 4.dp),
+        fontFamily = Inter, fontSize = 16.sp, lineHeight = 24.sp,
+        color = OverlayPalette.ink,
+    )
+}
+
+/** AI-summary toggle (footer right). Highlighted when the summary is showing; accent-tinted as a
+ *  quiet nudge on long transcripts. */
+@Composable
+private fun AISummaryButton(active: Boolean, nudge: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(9.dp))
             .then(
-                if (on) Modifier.background(OverlayPalette.accentDeep)
-                else Modifier.border(1.dp, OverlayPalette.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                if (active) Modifier
+                    .background(OverlayPalette.accent.copy(alpha = 0.22f))
+                    .border(1.dp, OverlayPalette.accent, RoundedCornerShape(9.dp))
+                else Modifier
             )
-            .clickable { onToggleChain(!on) }
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .clickable(onClick = onClick)
+            .padding(7.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Text(
-            if (on) "All ${state.chainCount} notes ✓" else "Transcribe all ${state.chainCount}",
-            fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-            fontSize = 12.sp,
-            color = if (on) Color(0xFFFFF3E9) else OverlayPalette.accent,
-        )
-    }
-}
-
-@Composable
-private fun TranscriptPane(state: OverlayUiState) {
-    if (state.chainMode && state.chainParts.isNotEmpty()) {
-        Column {
-            state.chainParts.forEachIndexed { i, part ->
-                if (i > 0) Spacer(Modifier.height(14.dp))
-                Text(
-                    if (i + 1 == state.chainPart) "PART ${i + 1} · THIS NOTE" else "PART ${i + 1}",
-                    fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-                    fontSize = 10.sp, letterSpacing = 1.5.sp,
-                    color = OverlayPalette.accent,
-                )
-                Spacer(Modifier.height(4.dp))
-                when {
-                    part == null -> Text(
-                        "transcribing…",
-                        fontFamily = Inter, fontSize = 13.sp,
-                        color = OverlayPalette.inkFaint,
-                    )
-                    part.startsWith("[") -> Text(
-                        humanizeNotice(part),
-                        fontFamily = Inter, fontSize = 13.sp,
-                        color = OverlayPalette.inkMuted,
-                    )
-                    else -> Text(
-                        part,
-                        fontFamily = Inter, fontSize = 15.sp, lineHeight = 23.sp,
-                        color = OverlayPalette.ink,
-                    )
-                }
-            }
-        }
-    } else {
-        Text(
-            state.transcript.orEmpty(),
-            fontFamily = Inter, fontSize = 15.sp, lineHeight = 23.sp,
-            color = OverlayPalette.ink,
+        Icon(
+            TacitIcons.Summary,
+            contentDescription = if (active) "Show transcript" else "AI summary",
+            tint = if (active || nudge) OverlayPalette.accent else OverlayPalette.inkMuted,
+            modifier = Modifier.size(18.dp),
         )
     }
 }
@@ -799,101 +1000,28 @@ private fun EntityChipsFlow(entities: List<ActionEntity>, onTap: (ActionEntity) 
     }
 }
 
-/** Low-confidence disambiguation: up to three tappable candidate rows + "None of these". */
+/**
+ * No confident match. Plain recovery: just a "replay the note" prompt. If the screen isn't being
+ * shared (we were on the mic), add a nudge + a clear Share-screen button for better accuracy.
+ * No "listen again" / "close" buttons, no candidate picker.
+ */
 @Composable
-private fun CloseMatchesBody(
-    state: OverlayUiState,
-    onCommit: (Int) -> Unit,
-    onNone: () -> Unit,
-) {
+private fun NoMatchBody(state: OverlayUiState, onShare: () -> Unit) {
     Column {
         Text(
-            "CLOSE MATCHES",
-            fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-            fontSize = 10.sp, letterSpacing = 1.5.sp,
-            color = OverlayPalette.accent,
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Not sure which one this was.",
+            if (state.micBanner) "Share your screen for surer matches." else "No match yet.",
             fontFamily = Inter, fontWeight = FontWeight.Medium,
             fontSize = 15.sp, color = OverlayPalette.ink,
         )
-        Spacer(Modifier.height(2.dp))
-        Text(
-            "Pick the note you played.",
-            fontFamily = Inter, fontSize = 12.sp,
-            color = OverlayPalette.inkMuted,
-        )
-        Spacer(Modifier.height(12.dp))
-        state.candidates.take(3).forEachIndexed { i, c ->
-            CandidateRow(c.meta) { onCommit(i) }
-        }
-        Spacer(Modifier.height(8.dp))
-        Box(
-            Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .border(1.dp, OverlayPalette.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                .clickable { onNone() }
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-        ) {
-            Text(
-                "None of these",
-                fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-                fontSize = 12.sp, color = OverlayPalette.accent,
-            )
-        }
-    }
-}
-
-@Composable
-private fun CandidateRow(meta: String, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 8.dp, horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            TacitIcons.Wave, contentDescription = null,
-            tint = OverlayPalette.accent, modifier = Modifier.size(16.dp),
-        )
-        Spacer(Modifier.width(12.dp))
-        Column {
-            Text(
-                "Voice note",
-                fontFamily = Inter, fontWeight = FontWeight.Medium,
-                fontSize = 14.sp, color = OverlayPalette.ink,
-            )
-            Text(
-                meta,
-                fontFamily = Inter, fontSize = 12.sp,
-                color = OverlayPalette.inkMuted,
-            )
-        }
-    }
-}
-
-@Composable
-private fun NoMatchBody(onListenAgain: () -> Unit, onClose: () -> Unit) {
-    Column {
-        Text(
-            "No confident match",
-            fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-            fontSize = 14.sp, color = OverlayPalette.accent,
-        )
         Spacer(Modifier.height(4.dp))
         Text(
-            "Replay the note and TACIT listens again from the start.",
+            "Replay the voice note and TACIT listens again.",
             fontFamily = Inter, fontSize = 13.sp,
             color = OverlayPalette.inkMuted,
         )
-        Spacer(Modifier.height(14.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CardActionButton("Listen again", solid = true, onClick = onListenAgain)
-            CardActionButton("Close", solid = false, onClick = onClose)
+        if (state.micBanner) {
+            Spacer(Modifier.height(14.dp))
+            CardActionButton("Share screen", solid = true, onClick = onShare)
         }
     }
 }

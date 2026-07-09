@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -12,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.delay
+import kotlin.math.sin
 
 /**
  * Inline, windowless replay of the overlay card for the onboarding Welcome demo and the Home
@@ -23,6 +25,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun DemoOverlayHost(modifier: Modifier = Modifier, replayKey: Int = 0) {
     var state by remember { mutableStateOf(demoInitial()) }
+    val demoLevels = remember { mutableStateListOf<Float>() }
     LaunchedEffect(replayKey) {
         state = demoInitial()
         delay(1800)
@@ -32,12 +35,29 @@ fun DemoOverlayHost(modifier: Modifier = Modifier, replayKey: Int = 0) {
         delay(1300)
         state = state.copy(phase = OverlayPhase.TRANSCRIPT, transcript = DEMO_TRANSCRIPT, summaryState = SummaryState.NONE)
     }
+    // Synthetic, speech-like levels so the demo waveform reacts like the real one while listening.
+    LaunchedEffect(replayKey) {
+        demoLevels.clear()
+        var i = 0
+        while (state.phase == OverlayPhase.LISTENING) {
+            // Raw RMS-scale synthetic voice (syllabic); the overlay conditions it into the bloom.
+            val tt = i * 0.09f
+            val s1 = maxOf(0f, sin(tt * 6.5f))
+            val s2 = maxOf(0f, sin(tt * 3.7f + 1f))
+            val syll = s1 * s1 * 0.6f + s2 * s2 * s2 * 0.4f
+            demoLevels.add((0.004f + 0.09f * syll).coerceIn(0f, 1f))  // real mic RMS scale
+            while (demoLevels.size > 48) demoLevels.removeAt(0)
+            i++
+            delay(90)
+        }
+    }
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
         // Dark-locked, like the real overlay; ~90% scale so it reads as a framed preview.
         TacitOverlayTheme {
             Box(Modifier.graphicsLayer { scaleX = 0.9f; scaleY = 0.9f }) {
                 TacitOverlayCard(
                     state = state,
+                    audioLevels = demoLevels,
                     onClose = {},
                     onShare = {},
                     onCopy = {},
