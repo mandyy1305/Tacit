@@ -14,10 +14,10 @@ import kotlin.math.abs
 data class VoiceRun(val durations: List<Double?>, val anchorIndex: Int)
 
 /**
- * A burst of consecutive voice notes from ONE sender in ONE chat. Membership comes from the chat
- * UI (the live overlay via [Chains.chainFrom]) or, offline in the app, from the transcript store
- * (via [Chains.storeChainFor]) — NOT from the old device-global WA#### + mtime heuristic, which
- * merged notes from different chats. Users can detach a note (see [ChainOverrides]).
+ * A burst of consecutive voice notes from ONE sender in ONE chat. Membership is detected live by
+ * the overlay from the chat UI ([Chains.chainFrom]) and persisted ([ChainMemberships]); the app
+ * only ever reads that persisted truth and never re-derives chains from store adjacency (which
+ * over-chained merely-nearby notes). Users can detach a note (see [ChainOverrides]).
  */
 data class Chain(
     val files: List<File>,
@@ -38,9 +38,6 @@ object Chains {
     // Interleaved non-matching files (other chats' media that bumped the global WA#### counter)
     // to skip while looking for the next run member before giving up that direction.
     private const val MAX_SKIP = 6
-    // Max download-time gap between neighbors to still count as one burst. Used chat-scoped, as a
-    // proximity proxy only (never compared to the chat clock — file mtime is download time).
-    private const val MAX_NEIGHBOR_GAP_MS = 10 * 60 * 1000L
 
     // ---- live overlay path (accessibility run + acoustic anchor) ----------------
 
@@ -108,39 +105,13 @@ object Chains {
         }
     }
 
-    // ---- offline app path (transcript store) ------------------------------------
+    // ---- app reader path (overlay-detected memberships only) --------------------
 
     /**
-     * The chain a STORED note belongs to, reconstructed from the transcript store — for the app
-     * reader (offline, no live chat). Groups the note's chat into bursts (see [clusterByTime]) and
-     * returns the burst containing [note], or null for a lone/detached note. Only transcribed
-     * notes are visible here.
-     */
-    fun storeChainFor(context: Context, note: StoredTranscript): Chain? {
-        if (note.waDate <= 0 || note.seq < 0) return null
-        val overrides = ChainOverrides.get(context)
-        if (overrides.isDetached(ChainOverrides.idOf(note.waDate, note.seq))) return null
-        val store = Transcripts.get(context)
-        val sameChat = store.all().filter {
-            it.seq >= 0 && it.waDate > 0 && it.chatName == note.chatName &&
-                !overrides.isDetached(ChainOverrides.idOf(it.waDate, it.seq))
-        }
-        val cluster = clusterByTime(sameChat).firstOrNull { c -> c.any { it.seq == note.seq } } ?: return null
-        if (cluster.size < 2) return null
-        val seqs = cluster.map { it.seq }
-        return Chain(
-            files = cluster.map { File(it.path) },
-            date = note.waDate,
-            firstSeq = seqs.min(),
-            lastSeq = seqs.max(),
-            chatName = note.chatName.ifEmpty { null },
-        )
-    }
-
-    /**
-     * The chain a note belongs to for the APP reader. Prefers the overlay-detected persisted burst
-     * (includes notes not transcribed yet, so the reader can offer "Transcribe all"), falling back
-     * to the store-derived cluster. Honors detach overrides. Null for a lone or detached note.
+     * The chain a note belongs to for the APP reader: the overlay-detected persisted burst
+     * ([ChainMemberships]) only. It includes notes not transcribed yet, so the reader can offer
+     * "Transcribe all". There is NO store-adjacency fallback: if the overlay never saw this note as
+     * part of a burst, it is not a chain. Honors detach overrides. Null for a lone or detached note.
      */
     fun chainForNote(context: Context, note: StoredTranscript): Chain? {
         if (note.waDate <= 0 || note.seq < 0) return null
@@ -150,24 +121,23 @@ object Chains {
 
         val persisted = ChainMemberships.get(context).forNote(noteId)
             ?.filter { !overrides.isDetached(it.id) }
-        if (persisted != null && persisted.size >= 2 && persisted.any { it.id == noteId }) {
-            val seqs = persisted.map { it.seq }
-            return Chain(
-                files = persisted.map { File(it.path) },
-                date = note.waDate,
-                firstSeq = seqs.min(),
-                lastSeq = seqs.max(),
-                chatName = note.chatName.ifEmpty { null },
-            )
-        }
-        return storeChainFor(context, note)
+            ?: return null
+        if (persisted.size < 2 || persisted.none { it.id == noteId }) return null
+        val seqs = persisted.map { it.seq }
+        return Chain(
+            files = persisted.map { File(it.path) },
+            date = note.waDate,
+            firstSeq = seqs.min(),
+            lastSeq = seqs.max(),
+            chatName = note.chatName.ifEmpty { null },
+        )
     }
 
     /**
-     * Keys of all stored transcripts that belong to some chain — for list badges. Unions
-     * store-derived bursts (transcribed notes clustered by chat + time) with the overlay-detected
-     * persisted bursts. Reads file mtimes, so callers should cache the result (see AppViewModel)
-     * rather than recompute every poll.
+     * Keys of stored transcripts that belong to some chain — for list badges. Chains come ONLY from
+     * what the overlay detected live and persisted ([ChainMemberships]); the app never re-derives
+     * them from store adjacency (which over-chained merely-nearby notes). AppViewModel still caches
+     * this against the membership generation.
      */
     fun memberKeys(context: Context): Set<String> {
         val store = Transcripts.get(context)
@@ -177,46 +147,11 @@ object Chains {
         val notes = store.all().filter {
             it.seq >= 0 && it.waDate > 0 && !overrides.isDetached(ChainOverrides.idOf(it.waDate, it.seq))
         }
-        // Store-derived clusters (transcribed-only bursts).
-        for ((_, group) in notes.groupBy { it.chatName }) {
-            for (cluster in clusterByTime(group)) {
-                if (cluster.size >= 2) cluster.forEach { out.add(it.key) }
-            }
-        }
-        // Overlay-detected bursts: badge any transcribed note that belongs to one (>=2 live members).
         for (n in notes) {
             val burst = memberships.forNote(ChainOverrides.idOf(n.waDate, n.seq))
                 ?.filter { !overrides.isDetached(it.id) }
             if (burst != null && burst.size >= 2) out.add(n.key)
         }
         return out
-    }
-
-    /**
-     * Split one chat's notes into bursts: sorted by WA#### seq (chronological within a chat), a
-     * new burst starts wherever the download-time gap to the previous note exceeds the window.
-     * Seq gaps are allowed (other chats' media interleave the global counter) — a burst is defined
-     * by time proximity within the chat, not strict seq contiguity.
-     */
-    private fun clusterByTime(notes: List<StoredTranscript>): List<List<StoredTranscript>> {
-        val sorted = notes.distinctBy { it.seq }.sortedBy { it.seq }
-        val out = ArrayList<List<StoredTranscript>>()
-        var cur = ArrayList<StoredTranscript>()
-        for (t in sorted) {
-            if (cur.isEmpty() || closeEnough(cur.last(), t)) cur.add(t)
-            else { out.add(cur); cur = arrayListOf(t) }
-        }
-        if (cur.isNotEmpty()) out.add(cur)
-        return out
-    }
-
-    /** Two neighbors are one burst only if their audio files landed within the gap (download-time
-     *  proxy — the store has no arrival time). Missing files (a cloud-restored library without
-     *  audio) skip the check and fall back to seq order within the chat. */
-    private fun closeEnough(a: StoredTranscript, b: StoredTranscript): Boolean {
-        val ma = File(a.path).lastModified()
-        val mb = File(b.path).lastModified()
-        if (ma <= 0L || mb <= 0L) return true
-        return abs(ma - mb) <= MAX_NEIGHBOR_GAP_MS
     }
 }
