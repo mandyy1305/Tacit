@@ -93,8 +93,8 @@ class SetupActions(
 /** The three top-level tabs shown in the bottom navigation bar. */
 private enum class Tab(val route: String, val label: String, val icon: ImageVector) {
     Home("home", "Home", TacitIcons.Home),
-    Library("library", "Library", TacitIcons.Library),
     Ask("ask", "Ask", TacitIcons.Ask),
+    Library("library", "Library", TacitIcons.Library),
 }
 
 private val TAB_ROUTES = Tab.entries.map { it.route }.toSet()
@@ -104,8 +104,8 @@ private const val TAB_ANIM_MS = 300
 /** Left-to-right position of a tab (for choosing slide direction); -1 for non-tab routes. */
 private fun tabIndex(route: String?): Int = when (route) {
     Tab.Home.route -> 0
-    Tab.Library.route -> 1
-    Tab.Ask.route -> 2
+    Tab.Ask.route -> 1
+    Tab.Library.route -> 2
     else -> -1
 }
 
