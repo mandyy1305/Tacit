@@ -31,50 +31,34 @@ object OverlayPreviewDriver {
         }, "overlay-preview").apply { isDaemon = true }.start()
     }
 
-    @Volatile private var previewChainMode = false
-
     private fun happyPath(o: OverlayController) {
-        // Wire the lazy actions the way Orchestrator does — the previewer taps the Summary tab
-        // and the "Transcribe all 4" toggle and watches the real interactions play out.
+        // Lazy chain (matches Orchestrator): seed the pager at match time, then transcribe a part
+        // only when the previewer swipes to it. The AI-summary button summarises the shown note.
         // (Callbacks fire on main; the fake latency runs on its own daemon thread.)
-        previewChainMode = false
+        val parts = arrayOf<String?>(null, FAKE_PART_2, null, null) // part 2 (index 1) = the played note
         o.onRequestSummary = {
-            if (previewChainMode) {
-                o.setChainSummaryGenerating()
-                Thread({ Thread.sleep(1800); o.setChainSummaryReady(FAKE_CHAIN_SUMMARY) }, "preview-chain")
-                    .apply { isDaemon = true }.start()
-            } else {
-                o.setSummaryGenerating()
-                Thread({ Thread.sleep(2000); o.setSummaryReady(FAKE_SUMMARY) }, "preview-summary")
-                    .apply { isDaemon = true }.start()
-            }
+            o.setSummaryGenerating()
+            Thread({ Thread.sleep(1600); o.setSummaryReady(FAKE_SUMMARY) }, "preview-summary")
+                .apply { isDaemon = true }.start()
         }
-        o.onToggleChain = { on ->
-            previewChainMode = on
-            o.setChainMode(on)
-            if (on) {
-                o.setSummaryIdle()
-                o.setChainParts(listOf(null, FAKE_PART_2, null, null)) // part 2 = the played note
+        o.onPartVisible = { i ->
+            o.setSummaryIdle() // summary is per-note — re-arm for the newly shown part
+            if (parts.getOrNull(i) == null) {
                 Thread({
-                    val parts = arrayOf<String?>(null, FAKE_PART_2, null, null)
-                    for (i in intArrayOf(0, 2, 3)) {
-                        Thread.sleep(1200)
-                        if (!previewChainMode) return@Thread
-                        parts[i] = FAKE_PARTS[i]
-                        o.setChainParts(parts.toList())
-                    }
-                }, "preview-chain-parts").apply { isDaemon = true }.start()
-            } else {
-                o.setSummaryIdle()
+                    Thread.sleep(1100)
+                    parts[i] = FAKE_PARTS.getOrNull(i)
+                    o.setChainParts(parts.toList())
+                }, "preview-part-$i").apply { isDaemon = true }.start()
             }
         }
         o.showSpinner("Listening…")
         o.setInfo(null, "10:42")
-        Thread.sleep(700); o.setStatus("listening 0.7s… (no match yet)")
-        Thread.sleep(700); o.setStatus("listening 1.4s… (no match yet)")
-        Thread.sleep(700); o.setStatus("listening 2.1s — leading: PTT-20260630-WA0012.opus (14)")
-        Thread.sleep(700); o.setStatus("listening 2.8s — leading: PTT-20260630-WA0012.opus (37)")
-        Thread.sleep(500)
+        fakeListen(o, 40, listOf(
+            0.7 to "listening 0.7s… (no match yet)",
+            1.4 to "listening 1.4s… (no match yet)",
+            2.1 to "listening 2.1s — leading: PTT-20260630-WA0012.opus (14)",
+            2.8 to "listening 2.8s — leading: PTT-20260630-WA0012.opus (37)",
+        ))
         o.setCandidates(
             listOf(
                 fake("PTT-20260630-WA0012.opus", 42.0, 20260630, 52.0),
@@ -86,15 +70,9 @@ object OverlayPreviewDriver {
         o.setSource("local")
         o.setTranscript("transcribing…")
         Thread.sleep(2200)
-        o.setTranscript(
-            "Haan bhai, kal milte hain office ke baad. I'll bring the documents you asked for: " +
-                "the lease agreement and both ID proofs. Agar time mile toh please banker ko " +
-                "call kar lena before five, warna appointment shift ho jayegi to next week. " +
-                "Aur haan, Priya said the venue is confirmed for the twenty-third, so block " +
-                "your calendar. Baaki sab theek hai, mummy ko bola maine ki hum Sunday ko " +
-                "aayenge lunch pe. Chalo, see you tomorrow!"
-        )
+        o.setTranscript(FAKE_PART_2)      // the matched note is part 2 of the chain
         o.setChainInfo(2, 4)
+        o.setChainParts(parts.toList())   // seed the pager: part 2 filled, the rest lazy
     }
 
     private const val FAKE_SUMMARY =
@@ -106,19 +84,10 @@ object OverlayPreviewDriver {
             "- 23rd ke liye calendar block karna\n" +
             "- Sunday lunch pe mummy ke ghar jana"
 
-    private const val FAKE_CHAIN_SUMMARY =
-        "SUMMARY: Poora plan set hai, kal office ke baad documents exchange, " +
-            "banker ka kaam aaj hi, 23rd ka event confirm, aur Sunday family lunch. " +
-            "Sabse zaroori: banker ko 5 baje se pehle call karna.\n" +
-            "ACTIONS:\n" +
-            "- Banker ko aaj 5 baje se pehle call karna (sabse urgent)\n" +
-            "- Kal lease agreement aur dono ID proofs le jana\n" +
-            "- 23rd ke liye calendar block karna\n" +
-            "- Sunday ko mummy ke ghar lunch"
-
     private const val FAKE_PART_2 =
         "Haan bhai, kal milte hain office ke baad. I'll bring the documents you asked for: " +
-            "the lease agreement and both ID proofs."
+            "the lease agreement and both ID proofs. Agar time mile toh please banker ko call " +
+            "kar lena before five, warna appointment shift ho jayegi to next week."
     private val FAKE_PARTS = arrayOf(
         "Arre sun, ek important baat batani thi tujhe. Do teen cheezein hain actually.",
         FAKE_PART_2,
@@ -131,13 +100,13 @@ object OverlayPreviewDriver {
     private fun degraded(o: OverlayController) {
         o.showSpinner("Listening…")
         o.setInfo(null, "18:03")
-        Thread.sleep(600)
         o.showMicFallbackBanner { AppLog.i("[preview] Share-screen tapped (no-op in preview).") }
-        o.setStatus("listening 0.7s… (no match yet)")
-        Thread.sleep(900); o.setStatus("listening 1.6s… (no match yet)")
-        Thread.sleep(900); o.setStatus("listening 2.5s… (no match yet)")
-        Thread.sleep(900); o.clearBanner()
-        Thread.sleep(300)
+        fakeListen(o, 34, listOf(
+            0.7 to "listening 0.7s… (no match yet)",
+            1.6 to "listening 1.6s… (no match yet)",
+            2.5 to "listening 2.5s… (no match yet)",
+        ))
+        o.clearBanner()
         o.setCandidates(
             (1..6).map { i ->
                 fake("PTT-2026062$i-WA000$i.opus", 8.0 * i, 20260620 + i, 24.0 / i)
@@ -145,6 +114,24 @@ object OverlayPreviewDriver {
             false,
         )
         // No setTranscript — a low-confidence result renders as the close-matches picker (state H).
+    }
+
+    /** Drives [steps] ~90 ms ticks of the listening state: pushes a synthetic, speech-like audio
+     *  level each tick (so the live waveform reacts) and flips the status line at the given
+     *  elapsed-second thresholds. Mirrors what the real capture source feeds via onLevel. */
+    private fun fakeListen(o: OverlayController, steps: Int, statuses: List<Pair<Double, String>>) {
+        var next = 0
+        for (i in 0 until steps) {
+            val tSec = i * 0.09
+            while (next < statuses.size && tSec >= statuses[next].first) { o.setStatus(statuses[next].second); next++ }
+            // Raw RMS-scale synthetic voice: syllabic swells that settle toward the gate floor
+            // (so the overlay's conditioning collapses to dots between syllables, then blooms).
+            val s1 = Math.max(0.0, Math.sin(tSec * 6.5))
+            val s2 = Math.max(0.0, Math.sin(tSec * 3.7 + 1.0))
+            val syll = s1 * s1 * 0.6 + s2 * s2 * s2 * 0.4
+            o.pushAudioLevel((0.004 + 0.09 * syll).toFloat())  // real mic RMS scale (~0.004–0.094)
+            Thread.sleep(90)
+        }
     }
 
     private fun fake(name: String, dur: Double, waDate: Int, score: Double) = CandidateFile(

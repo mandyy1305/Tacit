@@ -56,8 +56,12 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
     @Volatile private var sessionRun: VoiceRun? = null
     /** The matched note file for the current session (summary-state restores on chain toggle-off). */
     @Volatile private var sessionFile: File? = null
-    /** Ranked candidates surfaced to the card (close-matches picker / "Wrong note?"); index-aligned
-     *  with the rows so a tapped row commits the right file. */
+    /** Chain part currently shown in the card (0-based). Drives lazy transcription + per-part summary. */
+    @Volatile private var currentPartIndex = 0
+    /** Per-part transcripts for [pendingChain], filled lazily as the user swipes; null = not yet done. */
+    @Volatile private var chainPartCache: Array<String?>? = null
+    /** Ranked candidates for the low-confidence close-matches picker; index-aligned with the rows
+     *  so a tapped row commits the right file. */
     @Volatile private var sessionCandidates: List<CandidateFile> = emptyList()
     /** The committed match for the current session (target of the "Try again" notice retry). */
     @Volatile private var sessionMatch: CandidateFile? = null
@@ -85,6 +89,7 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         // actually checks.
         overlay.onDismiss = { cancel("overlay dismissed"); generation++; pendingCloud = null }
         overlay.onToggleChain = { on -> onChainModeToggled(on) }
+        overlay.onPartVisible = { i -> onPartVisible(i) }
         overlay.onRequestSummary = { requestNoteSummary() }
         overlay.onCommitCandidate = { i -> commitCandidate(i) }
         overlay.onNoneOfThese = { overlay.showNoMatch() }
@@ -127,6 +132,7 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         // listening/cancelRequested are set synchronously in onPlayTap (race-free with a fast pause).
         listenThread = Thread.currentThread()
         var usedMicFgs = false
+        var levelSrc: AudioWindowSource? = null // holds the capture source so we can detach onLevel in finally
         try {
             if (cancelRequested) { overlay.dismiss(); return }
             val proj = ProjectionService.source
@@ -157,6 +163,10 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
                 return
             }
             if (indexer.snapshot == null) AppLog.w("[orchestrator] index not ready (building?) — will keep trying while listening.")
+
+            // Feed the live listening waveform with the actual capture amplitude (~10 Hz).
+            src.onLevel = { overlay.pushAudioLevel(it) }
+            levelSrc = src
 
             val mark = src.mark()
             var streak = 0
@@ -200,7 +210,7 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
                         // interruption point). Without this check we'd auto-pause WhatsApp and
                         // transcribe into a dismissed card — full pipeline, invisible overlay.
                         if (cancelRequested) break
-                        finalizeMatch(top, ranked, elapsed)
+                        finalizeMatch(top, elapsed)
                         return
                     }
                 } else {
@@ -233,6 +243,7 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
             AppLog.e("[orchestrator] listen loop error: ${t.javaClass.simpleName}: ${t.message}", t)
             try { overlay.setTranscript("[matching error — try again]") } catch (_: Throwable) {}
         } finally {
+            levelSrc?.onLevel = null // stop feeding the waveform (projection source outlives the listen)
             if (usedMicFgs) MicCaptureService.stop(appContext) // tear down the mic FGS + AudioRecord
             listenThread = null
             Thread.interrupted() // clear any pending interrupt so the pooled worker thread is clean
@@ -252,14 +263,12 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         }
     }
 
-    private fun finalizeMatch(top: Scored, ranked: List<Scored>, elapsed: Double) {
+    private fun finalizeMatch(top: Scored, elapsed: Double) {
         AppLog.i("[orchestrator] ✅ CONFIDENT after %.1fs: ${top.name} aligned=${top.aligned} -> transcribe.".format(elapsed))
         val cand = toCandidate(top, withDuration = true)
-        // Keep a few runner-ups so a confident-but-wrong match still has recourse ("Wrong note?").
-        val alts = ranked.take(4).mapIndexed { idx, s -> toCandidate(s, withDuration = idx < 3) }
-        sessionCandidates = alts
+        sessionCandidates = listOf(cand)
         sessionMatch = cand
-        overlay.setCandidates(alts, true) // show result (first = top) + mark card sticky BEFORE the pause click
+        overlay.setCandidates(listOf(cand), true) // show result + mark card sticky BEFORE the pause click
         if (Toggles.pauseOnMatch && !cancelRequested) {
             AppLog.i("[orchestrator] match confirmed — pausing WhatsApp playback.")
             onMatchPause?.invoke() // pause click lands outside the overlay; sticky keeps the card up
@@ -272,7 +281,7 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
         transcribeExec.execute { resolveTranscriptAndSummary(cand, gen) }
     }
 
-    /** User picked an alternate from the close-matches / "Wrong note?" picker. Commit it as the
+    /** User picked an alternate from the close-matches picker. Commit it as the
      *  match and transcribe it via the normal path (same session as the play-tap). */
     private fun commitCandidate(index: Int) {
         val picked = sessionCandidates.getOrNull(index) ?: return
@@ -403,8 +412,22 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
             }
         }
         if (chain != null && gen == generation) {
-            AppLog.i("[chains] $name is part ${chain.partIndexOf(file)} of ${chain.size} (${chain.id}).")
-            overlay.setChainInfo(chain.partIndexOf(file), chain.size)
+            // Seed the pager immediately (no "Transcribe all" toggle any more): the matched part
+            // is filled with its transcript, sibling parts with whatever's already cached, the rest
+            // null (lazy — transcribed only when the user swipes to them, see [onPartVisible]).
+            val store = Transcripts.get(appContext)
+            val idx = (chain.partIndexOf(file) - 1).coerceIn(0, chain.size - 1)
+            val cache = arrayOfNulls<String>(chain.size)
+            for ((i, f) in chain.files.withIndex()) cache[i] = store.find(f)
+            cache[idx] = transcript
+            chainPartCache = cache
+            currentPartIndex = idx
+            AppLog.i("[chains] $name is part ${idx + 1} of ${chain.size} (${chain.id}).")
+            overlay.setChainInfo(idx + 1, chain.size)
+            overlay.setChainParts(cache.toList())
+        } else {
+            chainPartCache = null
+            currentPartIndex = 0
         }
     }
 
@@ -438,6 +461,29 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
             ChainSummarizer.request(appContext, chain, sessionChatName ?: chain.chatName) { raw ->
                 // Only paint if this session is still current AND still in chain mode.
                 if (gen == generation && chainModeEnabled) overlay.setChainSummaryReady(raw)
+            }
+            return
+        }
+        // Chain (lazy model): summarise the note currently shown in the pager — just that one part.
+        // Its transcript comes from the lazy cache (fallback to the store).
+        val chain = pendingChain
+        if (chain != null) {
+            val i = currentPartIndex.coerceIn(0, chain.size - 1)
+            val file = chain.files.getOrNull(i) ?: return
+            val store = Transcripts.get(appContext)
+            val transcript = (chainPartCache?.getOrNull(i) ?: store.find(file)) ?: return
+            if (transcript.startsWith("[")) return
+            val cached = store.entry(file)?.summary.orEmpty()
+            if (cached.isNotEmpty()) { overlay.setSummaryReady(cached); return }
+            if (!Summarizer.canSummarize(appContext)) { overlay.setSummaryUnavailable(); return }
+            overlay.setSummaryGenerating()
+            val key = Transcripts.keyFor(file)
+            Summarizer.request(appContext, key, transcript) { raw ->
+                if (!raw.startsWith("[")) {
+                    Transcripts.get(appContext).putSummary(key, raw)
+                    SyncEngine.requestSync(appContext)
+                }
+                if (gen == generation && currentPartIndex == i) overlay.setSummaryReady(raw)
             }
             return
         }
@@ -505,6 +551,40 @@ class Orchestrator(context: Context, private val overlay: OverlayController) {
             }
             if (gen == generation) overlay.setChainParts(parts.toList())
         }
+    }
+
+    /** Card swiped to chain part [i] (0-based). Lazily transcribe that part if we don't have it,
+     *  and re-aim the Summary tab at it (cached gist → instant, else idle for the AI button). Disk
+     *  work runs on [chainExec]; the card callback fires on the main thread. */
+    private fun onPartVisible(i: Int) {
+        val chain = pendingChain ?: return
+        if (i < 0 || i >= chain.size) return
+        currentPartIndex = i
+        val gen = generation
+        chainExec.execute {
+            if (gen != generation) return@execute
+            val file = chain.files[i]
+            val cachedSummary = Transcripts.get(appContext).entry(file)?.summary.orEmpty()
+            if (cachedSummary.isNotEmpty()) overlay.setSummaryReady(cachedSummary) else overlay.setSummaryIdle()
+            if (chainPartCache?.getOrNull(i) == null) transcribePart(chain, i, gen)
+        }
+    }
+
+    /** Runs on [chainExec]. Transcribes a single chain part on demand (cloud→local via the shared
+     *  router — lands in history too), fills [chainPartCache], and repaints. Bails if superseded. */
+    private fun transcribePart(chain: Chain, i: Int, gen: Int) {
+        val cache = chainPartCache ?: return
+        if (gen != generation || cache.getOrNull(i) != null) return
+        val f = chain.files[i]
+        val text = if (!f.exists()) "[this note isn't on this phone]" else try {
+            TranscribeRouter.transcribe(appContext, f, sessionChatName ?: chain.chatName)
+        } catch (t: Throwable) {
+            AppLog.w("[chains] part ${i + 1} transcription failed: ${t.message}")
+            "[transcription error: ${t.message}]"
+        }
+        if (gen != generation) return
+        cache[i] = text
+        overlay.setChainParts(cache.toList())
     }
 
     private fun toCandidate(s: Scored, withDuration: Boolean = false): CandidateFile {

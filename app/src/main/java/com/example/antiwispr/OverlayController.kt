@@ -7,6 +7,7 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import com.example.antiwispr.ui.overlay.NoticeAction
 import com.example.antiwispr.ui.overlay.OverlayComposeWindow
@@ -38,12 +39,16 @@ class OverlayController(private val ctx: Context) {
     private val main = Handler(Looper.getMainLooper())
     private var window: OverlayComposeWindow? = null
     private val state = mutableStateOf(OverlayUiState())
+    /** Recent capture amplitudes (0..1), newest last — drives the live listening waveform. */
+    private val audioLevels = mutableStateListOf<Float>()
 
     @Volatile private var onShareAction: (() -> Unit)? = null
     /** Invoked when the user dismisses the card (tap-away / ✕). Orchestrator uses it to cancel a listen. */
     @Volatile var onDismiss: (() -> Unit)? = null
     /** Invoked by the card's "Transcribe all N" chain toggle with the new desired state. */
     @Volatile var onToggleChain: ((Boolean) -> Unit)? = null
+    /** Invoked when the user swipes to chain part [index] (0-based); drives lazy per-part transcription. */
+    @Volatile var onPartVisible: ((Int) -> Unit)? = null
     /** Invoked when the user opens the Summary tab and no summary exists yet (lazy generation). */
     @Volatile var onRequestSummary: (() -> Unit)? = null
     /** Card's candidate picker: commit the tapped alternate as the match (index into candidates). */
@@ -118,6 +123,7 @@ class OverlayController(private val ctx: Context) {
         dismissed = false // allow the card again
         sticky = false    // listening is dismissable by tapping away
         cancelRemoveFallback()
+        audioLevels.clear()
         state.value = OverlayUiState(visible = true, phase = OverlayPhase.LISTENING, statusLine = message)
         ensureWindow()             // reuses the persistent window (created at warm-up) — never re-added
         window?.setTouchable(true) // card is up: accept its taps + tap-away
@@ -138,6 +144,13 @@ class OverlayController(private val ctx: Context) {
 
     fun setInfo(durationSec: Double?, timestamp: String?) {
         // API kept for Orchestrator; the card deliberately shows neither value.
+    }
+
+    /** Push a live capture amplitude (0..1) for the listening waveform (~10 Hz, from the audio
+     *  thread). Keeps a short rolling history; the newest sample is the right-most bar. */
+    fun pushAudioLevel(level: Float) = onMain {
+        audioLevels.add(level.coerceIn(0f, 1f))
+        while (audioLevels.size > 48) audioLevels.removeAt(0)
     }
 
     /** Live one-line status during continuous listening. */
@@ -173,15 +186,6 @@ class OverlayController(private val ctx: Context) {
                 match = infos.firstOrNull(),
                 candidates = infos,
             )
-        }
-    }
-
-    /** Re-open the close-matches picker from a confident result ("Wrong note?"); only when the
-     *  session actually carried alternates. */
-    fun showCandidatePicker() = onMain {
-        if (dropUpdate("candidate picker")) return@onMain
-        if (state.value.candidates.size >= 2) {
-            state.value = state.value.copy(phase = OverlayPhase.CLOSE_MATCHES)
         }
     }
 
@@ -289,6 +293,7 @@ class OverlayController(private val ctx: Context) {
             }
             dismissed = true
             sticky = false
+            audioLevels.clear()
             state.value = state.value.copy(visible = false) // plays the exit transition
             AppLog.i("[overlay] result card dismissed.")
             onDismiss?.invoke() // synchronous — cancels an in-progress listen immediately
@@ -305,14 +310,15 @@ class OverlayController(private val ctx: Context) {
                 TacitOverlayTheme {
                     TacitOverlayCard(
                         state = state.value,
+                        audioLevels = audioLevels,
                         onClose = { dismiss() },
                         onShare = { onShareAction?.invoke() },
                         onCopy = { text -> copyText(text) },
                         onToggleChain = { on -> onToggleChain?.invoke(on) },
+                        onPartVisible = { i -> onPartVisible?.invoke(i) },
                         onRequestSummary = { onRequestSummary?.invoke() },
                         onCommitCandidate = { i -> onCommitCandidate?.invoke(i) },
                         onNoneOfThese = { onNoneOfThese?.invoke() },
-                        onWrongNote = { showCandidatePicker() },
                         onNoticeAction = { action ->
                             when (action) {
                                 NoticeAction.FINISH_SETUP -> { launchApp(); dismiss() }

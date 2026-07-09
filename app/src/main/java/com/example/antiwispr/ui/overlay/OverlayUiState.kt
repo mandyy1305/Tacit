@@ -35,7 +35,7 @@ data class OverlayUiState(
     val chainParts: List<String?> = emptyList(), // per-part transcripts in chain mode; null = pending
     val copied: Boolean = false,
     val source: String = "",             // provenance of the result/engine: "local" | "cloud" | "" = unknown
-    val candidates: List<MatchInfo> = emptyList(), // low-confidence picker rows; also the "Wrong note?" set
+    val candidates: List<MatchInfo> = emptyList(), // low-confidence close-matches picker rows
 )
 
 internal data class StatusInfo(val line: String, val warn: Boolean = false)

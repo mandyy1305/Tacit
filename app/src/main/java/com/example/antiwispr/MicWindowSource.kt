@@ -21,6 +21,7 @@ class MicWindowSource(context: Context) : AudioWindowSource {
 
     private val appContext = context.applicationContext
     override val sampleRate = 16000
+    @Volatile override var onLevel: ((Float) -> Unit)? = null
 
     private var record: AudioRecord? = null
     private var readerThread: Thread? = null
@@ -80,6 +81,13 @@ class MicWindowSource(context: Context) : AudioWindowSource {
                         val f = v / 32768.0; accumSq += f * f
                     }
                     accumN += n
+                    // Per-chunk RAW RMS (~10 Hz) for the live listening waveform; the overlay does
+                    // the gate/AGC/gamma conditioning + envelope, so it must receive the raw level.
+                    onLevel?.let { cb ->
+                        var sq = 0.0
+                        for (i in 0 until n) { val f = chunk[i] / 32768.0; sq += f * f }
+                        cb(sqrt(sq / n).toFloat())
+                    }
                     if (accumN >= sampleRate) {
                         val rms = sqrt(accumSq / accumN)
                         AppLog.i("[mic] window RMS=%.5f peak=%d (%s)".format(

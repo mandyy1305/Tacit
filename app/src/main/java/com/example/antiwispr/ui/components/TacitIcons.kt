@@ -183,4 +183,59 @@ object TacitIcons {
             }
         }.build()
     }
+
+    /** AI summary — three text lines with a sparkle bottom-right (the "summarize" glyph). */
+    val Summary: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "tacit.summary", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            // Text lines (stroked)
+            path(
+                fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.7f,
+                strokeLineCap = StrokeCap.Round
+            ) {
+                moveTo(4f, 6f); lineTo(20f, 6f)
+                moveTo(4f, 11f); lineTo(18f, 11f)
+                moveTo(4f, 16f); lineTo(11f, 16f)
+            }
+            // Sparkle (filled 4-point star, bottom-right)
+            path(fill = SolidColor(Color.Black), pathFillType = PathFillType.NonZero) {
+                moveTo(18.5f, 13.3f)
+                curveTo(18.7f, 15.2f, 19.6f, 16.1f, 21.5f, 16.3f)
+                curveTo(19.6f, 16.5f, 18.7f, 17.4f, 18.5f, 19.3f)
+                curveTo(18.3f, 17.4f, 17.4f, 16.5f, 15.5f, 16.3f)
+                curveTo(17.4f, 16.1f, 18.3f, 15.2f, 18.5f, 13.3f)
+                close()
+            }
+        }.build()
+    }
+
+    /** Screen-share — a monitor outline with a stand (the Share-screen control). */
+    val ScreenShare: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "tacit.screenshare", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.7f,
+                strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                // Screen (rounded rect)
+                moveTo(4.5f, 4f)
+                lineTo(19.5f, 4f)
+                curveTo(20.6f, 4f, 21.5f, 4.9f, 21.5f, 6f)
+                lineTo(21.5f, 15f)
+                curveTo(21.5f, 16.1f, 20.6f, 17f, 19.5f, 17f)
+                lineTo(4.5f, 17f)
+                curveTo(3.4f, 17f, 2.5f, 16.1f, 2.5f, 15f)
+                lineTo(2.5f, 6f)
+                curveTo(2.5f, 4.9f, 3.4f, 4f, 4.5f, 4f)
+                close()
+                // Stand
+                moveTo(12f, 17f); lineTo(12f, 21f)
+                moveTo(8.5f, 21f); lineTo(15.5f, 21f)
+            }
+        }.build()
+    }
 }

@@ -6,9 +6,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.StartOffset
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -29,11 +27,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -56,10 +56,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,12 +84,17 @@ import androidx.compose.ui.unit.sp
 import com.example.antiwispr.ActionEntity
 import com.example.antiwispr.EntityExtractor
 import com.example.antiwispr.ui.components.TacitIcons
-import com.example.antiwispr.ui.theme.Fraunces
 import com.example.antiwispr.ui.theme.Inter
 import com.example.antiwispr.ui.theme.TacitTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.pow
+import kotlin.math.sin
+import kotlin.math.tanh
 
 /**
  * The overlay is ALWAYS dark-glass — it floats over WhatsApp's green/dark chrome,
@@ -114,15 +121,16 @@ fun TacitOverlayTheme(content: @Composable () -> Unit) {
 @Composable
 fun TacitOverlayCard(
     state: OverlayUiState,
+    audioLevels: List<Float> = emptyList(),
     onClose: () -> Unit,
     onShare: () -> Unit,
     onCopy: (String) -> Unit,
     onToggleChain: (Boolean) -> Unit = {},
+    onPartVisible: (Int) -> Unit = {},
     onRequestSummary: () -> Unit = {},
     onEntityTap: (ActionEntity) -> Unit = {},
     onCommitCandidate: (Int) -> Unit = {},
     onNoneOfThese: () -> Unit = {},
-    onWrongNote: () -> Unit = {},
     onNoticeAction: (NoticeAction) -> Unit = {},
     onListenAgain: () -> Unit = {},
     onExitFinished: () -> Unit,
@@ -131,15 +139,6 @@ fun TacitOverlayCard(
     enterState.targetState = state.visible
     LaunchedEffect(enterState.currentState, enterState.targetState) {
         if (!enterState.currentState && !enterState.targetState) onExitFinished()
-    }
-
-    // One-shot amber wash when the match lands.
-    val flash = remember { Animatable(0f) }
-    LaunchedEffect(state.phase) {
-        if (state.phase == OverlayPhase.MATCHED) {
-            flash.snapTo(0.22f)
-            flash.animateTo(0f, tween(700))
-        }
     }
 
     AnimatedVisibility(
@@ -178,28 +177,21 @@ fun TacitOverlayCard(
                 .shadow(12.dp, corner, ambientColor = Color.Black, spotColor = Color.Black)
                 .clip(corner)
                 .background(Brush.verticalGradient(listOf(OverlayPalette.surfaceHi, OverlayPalette.surface)))
-                .drawBehind {
-                    if (flash.value > 0f) {
-                        drawRoundRect(
-                            OverlayPalette.accent.copy(alpha = flash.value),
-                            cornerRadius = CornerRadius(20.dp.toPx()),
-                        )
-                    }
-                }
                 .border(1.dp, OverlayPalette.hairline, corner)
                 .padding(18.dp)
         ) {
-            Header(onClose, dragModifier)
-
-            // Fade only — expand/shrink would animate layout height and resize the window
-            // per frame (same stutter as above).
-            AnimatedVisibility(
-                visible = state.micBanner,
-                enter = fadeIn(tween(220)),
-                exit = fadeOut(tween(150)),
-            ) {
-                MicFallbackPill(onShare)
+            // Hoisted so the top-bar pager and the transcript body agree on which chain part is
+            // open; resets to the matched part whenever a new result lands (chainPart changes).
+            var current by remember(state.chainPart, state.chainCount) {
+                mutableIntStateOf((state.chainPart - 1).coerceAtLeast(0))
             }
+            var hasSwiped by remember(state.chainPart, state.chainCount) { mutableStateOf(false) }
+            val goToPart: (Int) -> Unit = { i ->
+                val clamped = i.coerceIn(0, (state.chainCount - 1).coerceAtLeast(0))
+                if (clamped != current) { current = clamped; hasSwiped = true; onPartVisible(clamped) }
+            }
+
+            OverlayTopBar(state, current, hasSwiped, onClose, onShare, goToPart, dragModifier)
 
             Spacer(Modifier.height(12.dp))
 
@@ -218,10 +210,10 @@ fun TacitOverlayCard(
                 label = "phase",
             ) { phase ->
                 when (phase) {
-                    OverlayPhase.LISTENING -> ListeningBody(state)
+                    OverlayPhase.LISTENING -> ListeningBody(state, audioLevels)
                     OverlayPhase.MATCHED -> MatchedBody(state)
                     OverlayPhase.TRANSCRIBING -> TranscribingBody(state)
-                    OverlayPhase.TRANSCRIPT -> TranscriptBody(state, onCopy, onToggleChain, onRequestSummary, onEntityTap, onWrongNote)
+                    OverlayPhase.TRANSCRIPT -> TranscriptBody(state, current, goToPart, onCopy, onRequestSummary, onEntityTap)
                     OverlayPhase.CLOSE_MATCHES -> CloseMatchesBody(state, onCommitCandidate, onNoneOfThese)
                     OverlayPhase.NO_MATCH -> NoMatchBody(onListenAgain, onClose)
                     OverlayPhase.NOTICE -> NoticeBody(state, onNoticeAction)
@@ -233,100 +225,204 @@ fun TacitOverlayCard(
 
 // ---- pieces ---------------------------------------------------------------------
 
+/**
+ * Pinned top row. The left slot depends on phase/state — Share-screen control (on the mic),
+ * TACIT wordmark, or the chain pager — with the close button always on the right. Height is pinned
+ * so swapping slots never resizes the window. Carries the swipe-up-to-dismiss [dragModifier].
+ */
 @Composable
-private fun Header(onClose: () -> Unit, dragModifier: Modifier = Modifier) {
-    Row(dragModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                "TACIT",
-                fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-                fontSize = 10.sp, letterSpacing = 2.sp,
-                color = OverlayPalette.accent,
-            )
-            Text(
-                "Voice note",
-                fontFamily = Fraunces, fontWeight = FontWeight.SemiBold,
-                fontSize = 17.sp, color = OverlayPalette.ink,
-            )
-        }
-        Box(
-            Modifier
-                .size(32.dp)
-                .clip(CircleShape)
-                .clickable(onClick = onClose),
-            contentAlignment = Alignment.Center,
+private fun OverlayTopBar(
+    state: OverlayUiState,
+    current: Int,
+    hasSwiped: Boolean,
+    onClose: () -> Unit,
+    onShare: () -> Unit,
+    onGoToPart: (Int) -> Unit,
+    dragModifier: Modifier,
+) {
+    val listening = state.phase == OverlayPhase.LISTENING
+    val chain = state.chainCount > 1 && !listening
+    Column(dragModifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().defaultMinSize(minHeight = 30.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                Icons.Filled.Close, contentDescription = "Dismiss",
-                tint = OverlayPalette.inkMuted, modifier = Modifier.size(18.dp),
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                when {
+                    listening && state.micBanner -> ShareScreenControl(onShare)
+                    chain -> ChainPager(state.chainCount, current, state.chainParts, onGoToPart)
+                    else -> BrandWordmark()
+                }
+            }
+            Box(
+                Modifier.size(32.dp).clip(CircleShape).clickable(onClick = onClose),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.Close, contentDescription = "Dismiss",
+                    tint = OverlayPalette.inkMuted, modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+        // Teach the swipe once, until the user moves across the chain.
+        if (chain && !hasSwiped) {
+            Text(
+                "Chain of ${state.chainCount} notes. Swipe to read the next.",
+                fontFamily = Inter, fontSize = 11.sp, color = OverlayPalette.inkFaint,
+                modifier = Modifier.padding(top = 6.dp),
             )
         }
     }
 }
 
+/** App wordmark used in the top-left when there's no pager or share control to show. */
 @Composable
-private fun MicFallbackPill(onShare: () -> Unit) {
+private fun BrandWordmark() {
+    Text(
+        "TACIT",
+        fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+        fontSize = 13.sp, letterSpacing = 1.6.sp,
+        color = OverlayPalette.accent,
+    )
+}
+
+/** Screen-share control (top-left, mic fallback only): the old banner condensed to one tap. */
+@Composable
+private fun ShareScreenControl(onShare: () -> Unit) {
     Row(
         Modifier
-            .padding(top = 12.dp)
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(OverlayPalette.accent.copy(alpha = 0.12f))
-            .border(1.dp, OverlayPalette.accent.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onShare)
+            .padding(vertical = 4.dp, horizontal = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                "Using the mic for this one.",
-                fontFamily = Inter, fontWeight = FontWeight.Medium,
-                fontSize = 13.sp, color = OverlayPalette.ink,
-            )
-            Text(
-                "Screen share hears notes directly. Surer matches.",
-                fontFamily = Inter, fontSize = 11.sp,
-                color = OverlayPalette.inkMuted,
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        Box(
-            Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(OverlayPalette.accentDeep)
-                .clickable(onClick = onShare)
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-        ) {
-            Text(
-                "Share screen",
-                fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-                fontSize = 12.sp, color = Color(0xFFFFF3E9),
+        Icon(TacitIcons.ScreenShare, contentDescription = null, tint = OverlayPalette.accent, modifier = Modifier.size(17.dp))
+        Spacer(Modifier.width(7.dp))
+        Text(
+            "Share screen",
+            fontFamily = Inter, fontWeight = FontWeight.Medium,
+            fontSize = 13.sp, color = OverlayPalette.accent,
+        )
+    }
+}
+
+/** Instagram-stories pager over the chain: the open note is an amber bar, transcribed notes are
+ *  filled dots, notes not read yet are faint dots. Tap a node to jump. */
+@Composable
+private fun ChainPager(count: Int, current: Int, parts: List<String?>, onGoToPart: (Int) -> Unit) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (i in 0 until count) {
+            val isCur = i == current
+            val transcribed = parts.getOrNull(i) != null
+            Box(
+                Modifier
+                    .height(6.dp)
+                    .width(if (isCur) 22.dp else 6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(
+                        when {
+                            isCur -> OverlayPalette.accent
+                            transcribed -> OverlayPalette.accent.copy(alpha = 0.6f)
+                            else -> OverlayPalette.inkFaint
+                        }
+                    )
+                    .clickable { onGoToPart(i) },
             )
         }
     }
 }
 
-/** Five amber bars breathing in a staggered wave — the listening motif. */
+private fun smoothstep(e0: Float, e1: Float, x: Float): Float {
+    val t = ((x - e0) / (e1 - e0)).coerceIn(0f, 1f)
+    return t * t * (3f - 2f * t)
+}
+
+/** Frame-rate-independent asymmetric follower: chases a rising target fast, a falling one slowly. */
+private fun follow(cur: Float, target: Float, dt: Float, tauA: Float, tauR: Float): Float {
+    val tau = if (target > cur) tauA else tauR
+    return cur + (target - cur) * (1f - exp(-dt / tau))
+}
+
+/** Fixed Gaussian lens: 1 at the centre bar, tapering to [sMin] at the edges. */
+private fun lensWeight(i: Int, n: Int, sigma: Float, sMin: Float): Float {
+    val c = (n - 1) / 2f
+    return sMin + (1f - sMin) * exp(-((i - c) * (i - c)) / (2f * sigma * sigma))
+}
+
+/**
+ * Live listening meter — "Center-Out Bloom" (tuned in the waveform lab). The raw ~10 Hz capture
+ * amplitude is conditioned (soft gate → falling-peak AGC → gamma → soft-knee) into a level L,
+ * injected at the centre bar and diffused OUTWARD through an overshoot-free one-pole cascade, then
+ * shaped by a fixed Gaussian lens. Rises fast (70 ms) and falls slowly (400 ms), and settles to a
+ * centred row of gently breathing dots. A withFrameNanos loop drives it at display rate so the
+ * 10 Hz feed animates buttery-smooth. Stationary bars; no scrolling.
+ */
 @Composable
-private fun ListeningBars(modifier: Modifier = Modifier) {
-    val t = rememberInfiniteTransition(label = "eq")
-    val bars = List(5) { i ->
-        t.animateFloat(
-            initialValue = 0.22f, targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                tween(420, easing = FastOutSlowInEasing),
-                RepeatMode.Reverse,
-                initialStartOffset = StartOffset(i * 90),
-            ),
-            label = "bar$i",
-        )
+private fun ListeningWaveform(levels: List<Float>, modifier: Modifier = Modifier) {
+    val n = 31
+    val c = (n - 1) / 2
+    val ring = remember { FloatArray(c + 1) }   // cascade level per distance-from-centre
+    val agc = remember { floatArrayOf(0f) }     // falling-peak AGC state
+    var tick by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) {
+        var last = 0L
+        while (true) {
+            withFrameNanos { now ->
+                val dt = if (last == 0L) 0.016f else ((now - last) / 1_000_000_000f).coerceIn(0f, 0.05f)
+                last = now
+                val a = levels.lastOrNull() ?: 0f                      // latest raw RMS (held between pushes)
+                // conditioning — calibrated to the phone's real capture scale (measured on-device:
+                // speech RMS ~0.007–0.11, silence/pauses <0.003). The lab's laptop-mic scale ran
+                // ~5–10x hotter, which is why its 0.02 gate flat-lined normal-volume speech here.
+                val floor = 0.0025f
+                val gate = smoothstep(floor, 0.007f, a)               // open by ~0.007 so normal speech shows
+                agc[0] = maxOf(a, agc[0] - 0.10f * dt)                // gentle AGC: soft + loud both fill
+                val aRef = maxOf(0.015f, agc[0])                      // low reference so quiet speech normalizes up
+                val p = ((a - floor) / (aRef - floor)).coerceIn(0f, 1f)
+                var lc = p.pow(0.60f)                                  // gamma — gentle onset
+                if (lc > 0.75f) lc = 0.75f + 0.25f * tanh((lc - 0.75f) / 0.25f)  // soft-knee ceiling
+                val level = gate * lc
+                // centre-out cascade: master follower at the centre, diffusing outward 60 ms/ring
+                ring[0] = follow(ring[0], level, dt, 0.070f, 0.400f)
+                for (d in 1..c) ring[d] += (ring[d - 1] - ring[d]) * (1f - exp(-dt / 0.060f))
+                tick = now                                            // drive the redraw
+            }
+        }
     }
-    Canvas(modifier.width(34.dp).height(20.dp)) {
-        val bw = size.width / 9f // 5 bars + 4 gaps
-        bars.forEachIndexed { i, f ->
-            val h = size.height * f.value
+    Canvas(modifier.fillMaxWidth().height(46.dp)) {
+        val t = tick / 1_000_000_000f                                 // observed read → redraw each frame
+        val bw = 4.dp.toPx(); val gap = 4.dp.toPx()
+        val clusterW = n * bw + (n - 1) * gap
+        val x0 = (size.width - clusterW) / 2f
+        val cy = size.height / 2f
+        val dot = bw
+        val maxH = size.height * 0.92f
+        val sigma = n * 0.40f
+        // faint warm bloom behind the centre, following the centre level
+        val centre = ring[0]
+        if (centre > 0.02f) {
+            drawRect(
+                Brush.radialGradient(
+                    colors = listOf(OverlayPalette.accent.copy(alpha = 0.18f * centre), Color.Transparent),
+                    center = Offset(size.width / 2f, cy),
+                    radius = size.width * 0.42f,
+                )
+            )
+        }
+        for (i in 0 until n) {
+            val d = abs(i - c)
+            val w = lensWeight(i, n, sigma, 0.15f)
+            val act = (ring[d] * w).coerceIn(0f, 1f)
+            val idle = 0.10f * dot * sin(t * 2f * PI.toFloat() * 0.25f + i * 0.3f)
+            val shim = 1f + 0.12f * act * sin(t * 1.5f + i * 0.5f)
+            var h = dot + act * (maxH - dot) * shim + idle
+            if (h < dot) h = dot
             drawRoundRect(
                 OverlayPalette.accent,
-                topLeft = Offset(i * 2 * bw, (size.height - h) / 2f),
+                topLeft = Offset(x0 + i * (bw + gap), cy - h / 2f),
                 size = Size(bw, h),
                 cornerRadius = CornerRadius(bw / 2f),
             )
@@ -335,10 +431,10 @@ private fun ListeningBars(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ListeningBody(state: OverlayUiState) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        ListeningBars()
-        Spacer(Modifier.width(14.dp))
+private fun ListeningBody(state: OverlayUiState, audioLevels: List<Float>) {
+    Column {
+        ListeningWaveform(audioLevels)
+        Spacer(Modifier.height(8.dp))
         AnimatedContent(
             targetState = state.statusLine,
             transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(100)) },
@@ -346,7 +442,7 @@ private fun ListeningBody(state: OverlayUiState) {
         ) { line ->
             Text(
                 line,
-                fontFamily = Inter, fontSize = 14.sp,
+                fontFamily = Inter, fontSize = 13.sp,
                 color = if (state.statusWarn) OverlayPalette.accent else OverlayPalette.inkMuted,
             )
         }
@@ -490,178 +586,147 @@ private fun TranscribingShimmer() {
 @Composable
 private fun TranscriptBody(
     state: OverlayUiState,
+    current: Int,
+    onGoToPart: (Int) -> Unit,
     onCopy: (String) -> Unit,
-    onToggleChain: (Boolean) -> Unit,
     onRequestSummary: () -> Unit,
     onEntityTap: (ActionEntity) -> Unit,
-    onWrongNote: () -> Unit,
 ) {
-    // 0 = Transcript (default — instantly available), 1 = Summary (generated lazily the
-    // first time the user opens it).
-    var tab by remember { mutableIntStateOf(0) }
+    val isChain = state.chainCount > 1
+    // The note currently shown: a chain part (lazy — null while transcribing) or the single note.
+    val partText = if (isChain) state.chainParts.getOrNull(current) else state.transcript
+    // 0 = transcript, 1 = summary. Resets to transcript whenever the open note changes.
+    var view by remember(current) { mutableIntStateOf(0) }
     Column {
-        MatchLine(state, animateBadge = false)
-        if (state.chainCount > 1) {
-            Spacer(Modifier.height(8.dp))
-            ChainTogglePill(state, onToggleChain)
-        }
-        Spacer(Modifier.height(12.dp))
-        OverlayTabs(tab, onSelect = { i ->
-            tab = i
-            // Lazy summaries: the first open of the Summary tab starts generation. NONE =
-            // idle (Orchestrator armed a pending request); READY/UNAVAILABLE/GENERATING
-            // never re-fire, and the state flips to GENERATING synchronously on this tap.
-            if (i == 1 && state.summaryState == SummaryState.NONE) onRequestSummary()
-        })
-        Spacer(Modifier.height(10.dp))
+        // Hero: transcript (tap to copy, swipe to move across the chain) or the summary pane.
         // Fade only, size snaps (`using null`) — the no-window-resize-animation rule.
         AnimatedContent(
-            targetState = tab,
+            targetState = view,
             modifier = Modifier.weight(1f, fill = false),
             transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(90)) using null },
-            label = "tab",
-        ) { t ->
+            label = "view",
+        ) { v ->
             Box(Modifier.verticalScroll(rememberScrollState())) {
-                if (t == 0) TranscriptPane(state) else SummaryPane(state, onEntityTap)
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        val copyText = when {
-            tab == 1 -> state.summaryRaw.orEmpty()
-            state.chainMode && state.chainParts.any { it != null } ->
-                state.chainParts.mapIndexedNotNull { i, t -> t?.let { "Part ${i + 1}: $it" } }
-                    .joinToString("\n\n")
-            else -> state.transcript.orEmpty()
-        }
-        if (copyText.isNotBlank()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                SourceMark(state.source)
-                if (state.candidates.size > 1) {
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        "Wrong note?",
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable { onWrongNote() }
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
-                        fontFamily = Inter, fontSize = 11.sp,
-                        color = OverlayPalette.inkMuted,
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { onCopy(copyText) }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                ) {
-                    AnimatedContent(
-                        targetState = state.copied,
-                        transitionSpec = { fadeIn(tween(120)) togetherWith fadeOut(tween(80)) },
-                        label = "copy",
-                    ) { copied ->
-                        Text(
-                            if (copied) "COPIED ✓" else "COPY",
-                            fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-                            fontSize = 12.sp, letterSpacing = 1.sp,
-                            color = if (copied) OverlayPalette.mint else OverlayPalette.accent,
-                        )
-                    }
+                if (v == 0) {
+                    TranscriptHero(partText, current, isChain, onCopy, onGoToPart)
+                } else {
+                    SummaryPane(state, onEntityTap)
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun OverlayTabs(selected: Int, onSelect: (Int) -> Unit) {
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(OverlayPalette.ink.copy(alpha = 0.06f))
-            .padding(3.dp)
-    ) {
-        listOf("Transcript", "Summary").forEachIndexed { i, label ->
-            val active = i == selected
-            Box(
-                Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (active) OverlayPalette.accentDeep else Color.Transparent)
-                    .clickable { onSelect(i) }
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-            ) {
+        Spacer(Modifier.height(12.dp))
+        // Footer: provenance on the left, AI-summary toggle on the right.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // Copy confirmation is a quiet text swap (no background colour shift): the card bg
+            // stays the same dark espresso throughout.
+            if (state.copied) {
                 Text(
-                    label,
-                    fontFamily = Inter,
-                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
-                    fontSize = 12.sp,
-                    color = if (active) Color(0xFFFFF3E9) else OverlayPalette.inkMuted,
+                    "COPIED ✓",
+                    fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+                    fontSize = 10.sp, letterSpacing = 1.sp,
+                    color = OverlayPalette.mint,
                 )
+            } else {
+                SourceMark(state.source)
             }
+            Spacer(Modifier.weight(1f))
+            AISummaryButton(
+                active = view == 1,
+                nudge = view == 0 && (partText?.length ?: 0) > 220,
+                onClick = {
+                    if (view == 0) {
+                        view = 1
+                        // Lazy: first open with nothing armed kicks generation for THIS note.
+                        if (state.summaryState == SummaryState.NONE) onRequestSummary()
+                    } else {
+                        view = 0
+                    }
+                },
+            )
         }
     }
 }
 
-/** "Transcribe all N" toggle — flips the card between this-note and whole-burst content. */
+/** The transcript hero. Tap to copy; horizontal swipe moves across a chain. A null part is the
+ *  lazy "transcribing this note" state; a bracket string is a per-part notice. */
 @Composable
-private fun ChainTogglePill(state: OverlayUiState, onToggleChain: (Boolean) -> Unit) {
-    val on = state.chainMode
+private fun TranscriptHero(
+    text: String?,
+    current: Int,
+    isChain: Boolean,
+    onCopy: (String) -> Unit,
+    onGoToPart: (Int) -> Unit,
+) {
+    if (text == null) {
+        Column {
+            TranscribingShimmer()
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Transcribing note ${current + 1}…",
+                fontFamily = Inter, fontSize = 11.sp,
+                color = OverlayPalette.inkFaint,
+            )
+        }
+        return
+    }
+    if (text.startsWith("[")) {
+        Text(
+            humanizeNotice(text),
+            fontFamily = Inter, fontSize = 13.sp,
+            color = OverlayPalette.inkMuted,
+        )
+        return
+    }
+    val swipe = if (isChain) {
+        Modifier.pointerInput(current) {
+            var dx = 0f
+            detectHorizontalDragGestures(
+                onDragStart = { dx = 0f },
+                onHorizontalDrag = { _, d -> dx += d },
+                onDragEnd = {
+                    val threshold = 48.dp.toPx()
+                    when {
+                        dx <= -threshold -> onGoToPart(current + 1)
+                        dx >= threshold -> onGoToPart(current - 1)
+                    }
+                },
+            )
+        }
+    } else Modifier
+    Text(
+        text,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCopy(text) }
+            .then(swipe)
+            .padding(vertical = 4.dp),
+        fontFamily = Inter, fontSize = 16.sp, lineHeight = 24.sp,
+        color = OverlayPalette.ink,
+    )
+}
+
+/** AI-summary toggle (footer right). Highlighted when the summary is showing; accent-tinted as a
+ *  quiet nudge on long transcripts. */
+@Composable
+private fun AISummaryButton(active: Boolean, nudge: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(9.dp))
             .then(
-                if (on) Modifier.background(OverlayPalette.accentDeep)
-                else Modifier.border(1.dp, OverlayPalette.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                if (active) Modifier
+                    .background(OverlayPalette.accent.copy(alpha = 0.22f))
+                    .border(1.dp, OverlayPalette.accent, RoundedCornerShape(9.dp))
+                else Modifier
             )
-            .clickable { onToggleChain(!on) }
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .clickable(onClick = onClick)
+            .padding(7.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Text(
-            if (on) "All ${state.chainCount} notes ✓" else "Transcribe all ${state.chainCount}",
-            fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-            fontSize = 12.sp,
-            color = if (on) Color(0xFFFFF3E9) else OverlayPalette.accent,
-        )
-    }
-}
-
-@Composable
-private fun TranscriptPane(state: OverlayUiState) {
-    if (state.chainMode && state.chainParts.isNotEmpty()) {
-        Column {
-            state.chainParts.forEachIndexed { i, part ->
-                if (i > 0) Spacer(Modifier.height(14.dp))
-                Text(
-                    if (i + 1 == state.chainPart) "PART ${i + 1} · THIS NOTE" else "PART ${i + 1}",
-                    fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-                    fontSize = 10.sp, letterSpacing = 1.5.sp,
-                    color = OverlayPalette.accent,
-                )
-                Spacer(Modifier.height(4.dp))
-                when {
-                    part == null -> Text(
-                        "transcribing…",
-                        fontFamily = Inter, fontSize = 13.sp,
-                        color = OverlayPalette.inkFaint,
-                    )
-                    part.startsWith("[") -> Text(
-                        humanizeNotice(part),
-                        fontFamily = Inter, fontSize = 13.sp,
-                        color = OverlayPalette.inkMuted,
-                    )
-                    else -> Text(
-                        part,
-                        fontFamily = Inter, fontSize = 15.sp, lineHeight = 23.sp,
-                        color = OverlayPalette.ink,
-                    )
-                }
-            }
-        }
-    } else {
-        Text(
-            state.transcript.orEmpty(),
-            fontFamily = Inter, fontSize = 15.sp, lineHeight = 23.sp,
-            color = OverlayPalette.ink,
+        Icon(
+            TacitIcons.Summary,
+            contentDescription = if (active) "Show transcript" else "AI summary",
+            tint = if (active || nudge) OverlayPalette.accent else OverlayPalette.inkMuted,
+            modifier = Modifier.size(18.dp),
         )
     }
 }
