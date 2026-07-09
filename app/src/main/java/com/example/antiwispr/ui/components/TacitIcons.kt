@@ -359,4 +359,47 @@ object TacitIcons {
             }
         }.build()
     }
+
+    /** Sort — a down arrow beside decreasing lines (the Library sort control). */
+    val Sort: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "tacit.sort", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.7f,
+                strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                // Down arrow (left)
+                moveTo(6f, 5f)
+                lineTo(6f, 18.4f)
+                moveTo(3f, 15.2f)
+                lineTo(6f, 18.4f)
+                lineTo(9f, 15.2f)
+                // Decreasing lines (right)
+                moveTo(12f, 7f); lineTo(21f, 7f)
+                moveTo(12f, 12f); lineTo(18.5f, 12f)
+                moveTo(12f, 17f); lineTo(16f, 17f)
+            }
+        }.build()
+    }
+
+    /** Plain vertical arrow — the sort direction toggle (rotate 180 for descending). */
+    val ArrowUp: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "tacit.arrowup", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(12f, 19f)
+                lineTo(12f, 5f)
+                moveTo(6.5f, 10.5f)
+                lineTo(12f, 5f)
+                lineTo(17.5f, 10.5f)
+            }
+        }.build()
+    }
 }

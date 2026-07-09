@@ -131,6 +131,10 @@ data class SetupStatus(
 /** The five macro states of readiness (doc 01 §0). Home renders exactly one. */
 enum class SetupHealth { OFF, NEEDS_SETUP, ATTENTION, GETTING_READY, READY }
 
+/** How the Library sorts: by the note's on-disk file date, or when TACIT transcribed it. Held in
+ *  the ViewModel so it survives tab switches and so Home's "View all" can set it. */
+enum class LibrarySortField(val label: String) { FileDate("Date"), TranscribedTime("Transcribed Time") }
+
 enum class AskRole { User, Assistant }
 
 /** One turn in the Ask tab's chat thread. [id] is stable across the pending→answer swap so the
@@ -177,6 +181,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var chainKeysSig = ""
 
     var searchQuery by mutableStateOf("")
+
+    /** Library sort, hoisted so it persists across tab switches and can be driven from Home's
+     *  "View all" (which forces newest-transcribed-first). */
+    var librarySortField by mutableStateOf(LibrarySortField.FileDate)
+    var librarySortAsc by mutableStateOf(false) // false = descending (newest first)
 
     /** The Ask tab's chat thread. Hoisted here (not screen-local) so it survives tab switches
      *  and recomposition; each turn is answered independently from the note library. */

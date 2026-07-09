@@ -321,7 +321,12 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                     chainKeys = chainKeys,
                     actions = actions,
                     onOpenSettings = { nav.navigate("settings") },
-                    onOpenLibrary = { selectTab("library") },
+                    onOpenLibrary = {
+                        // "View all" always lands on newest-transcribed-first.
+                        vm.librarySortField = LibrarySortField.TranscribedTime
+                        vm.librarySortAsc = false
+                        selectTab("library")
+                    },
                     onOpenTranscript = { vm.selectedTranscript = it; nav.navigate("transcript") },
                     onFinishSetup = { nav.navigate("onboarding") },
                 )
@@ -330,6 +335,10 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 LibraryScreen(
                     library = history,
                     chainKeys = chainKeys,
+                    sortField = vm.librarySortField,
+                    sortAscending = vm.librarySortAsc,
+                    onSortField = { vm.librarySortField = it },
+                    onToggleSortDir = { vm.librarySortAsc = !vm.librarySortAsc },
                     onOpen = { vm.selectedTranscript = it; nav.navigate("transcript") },
                     onOpenSearch = { nav.navigate("search") },
                     onDelete = { vm.softDelete(it) },

@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Arrangement
@@ -25,7 +26,9 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -53,13 +56,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.antiwispr.StoredTranscript
 import com.example.antiwispr.cloud.SyncEngine
+import com.example.antiwispr.ui.LibrarySortField
 import com.example.antiwispr.ui.components.InkDivider
+import com.example.antiwispr.ui.components.OptionPickerSheet
 import com.example.antiwispr.ui.components.TacitIcons
 import com.example.antiwispr.ui.components.TranscriptCard
 import com.example.antiwispr.ui.components.dayGroupKey
@@ -67,6 +73,19 @@ import com.example.antiwispr.ui.components.dayHeaderLabel
 import com.example.antiwispr.ui.components.waDateLabel
 import com.example.antiwispr.ui.theme.Dimens
 import kotlinx.coroutines.launch
+
+/**
+ * The timestamp this record sorts by. FileDate reads the file's on-disk mtime out of the store key
+ * ("path|mtime|size"), falling back to the WhatsApp-date day when a record has no parseable mtime
+ * (legacy/cloud); TranscribedTime uses the store's updatedAt.
+ */
+private fun StoredTranscript.sortInstant(field: LibrarySortField): Long = when (field) {
+    LibrarySortField.TranscribedTime -> updatedAt
+    LibrarySortField.FileDate -> {
+        val parts = key.split('|')
+        parts.getOrNull(parts.size - 2)?.toLongOrNull() ?: dayGroupKey(waDate, updatedAt)
+    }
+}
 
 /**
  * The Library: the full transcript corpus, grouped under sticky day headers, newest first. Cloud-
@@ -78,6 +97,10 @@ import kotlinx.coroutines.launch
 fun LibraryScreen(
     library: List<StoredTranscript>,
     chainKeys: Set<String> = emptySet(),
+    sortField: LibrarySortField = LibrarySortField.FileDate,
+    sortAscending: Boolean = false,
+    onSortField: (LibrarySortField) -> Unit = {},
+    onToggleSortDir: () -> Unit = {},
     onOpen: (StoredTranscript) -> Unit,
     onOpenSearch: () -> Unit = {},
     onDelete: (List<StoredTranscript>) -> Unit = {},
@@ -91,18 +114,25 @@ fun LibraryScreen(
     val selected = remember { mutableStateListOf<String>() }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
+
+    var showSortSheet by remember { mutableStateOf(false) }
+
+    // Any sort change (and entering the tab) snaps the list back to the top so the newest/first
+    // note is in view, not some note left mid-scroll from before.
+    LaunchedEffect(sortField, sortAscending) { listState.scrollToItem(0) }
 
     fun exitSelection() { selectionMode = false; selected.clear() }
     fun toggle(key: String) { if (!selected.remove(key)) selected.add(key) }
 
     BackHandler(enabled = selectionMode) { exitSelection() }
 
-    // Newest day first; newest note first within a day. Grouped into day buckets (order preserved).
-    val groups = remember(library) {
-        library.sortedWith(
-            compareByDescending<StoredTranscript> { dayGroupKey(it.waDate, it.updatedAt) }
-                .thenByDescending { it.updatedAt }
-        ).groupBy { dayGroupKey(it.waDate, it.updatedAt) }
+    // Sort by the chosen field/direction, then bucket into days of that same field (headers match
+    // the order). groupBy keeps first-seen day order = sorted order, and item order within a day.
+    val groups = remember(library, sortField, sortAscending) {
+        val cmp = compareBy<StoredTranscript> { it.sortInstant(sortField) }
+        library.sortedWith(if (sortAscending) cmp else cmp.reversed())
+            .groupBy { dayGroupKey(-1, it.sortInstant(sortField)) }
     }
 
     fun copySelected() {
@@ -197,14 +227,28 @@ fun LibraryScreen(
                 }
             } else {
                 if (!selectionMode) {
-                    Text(
-                        if (library.size == 1) "1 transcript" else "${library.size} transcripts",
-                        modifier = Modifier.padding(horizontal = Dimens.screenPad, vertical = 6.dp),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(start = Dimens.screenPad, end = 12.dp, top = 2.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (library.size == 1) "1 transcript" else "${library.size} transcripts",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        SortControl(
+                            field = sortField,
+                            ascending = sortAscending,
+                            onPickField = { showSortSheet = true },
+                            onToggleDirection = onToggleSortDir,
+                        )
+                    }
                 }
                 LazyColumn(
+                    state = listState,
                     contentPadding = PaddingValues(bottom = 32.dp),
                     verticalArrangement = Arrangement.spacedBy(Dimens.itemGap),
                 ) {
@@ -226,6 +270,69 @@ fun LibraryScreen(
                     }
                 }
             }
+        }
+    }
+
+    if (showSortSheet) {
+        OptionPickerSheet(
+            title = "Sort by",
+            options = LibrarySortField.entries.toList(),
+            selected = sortField,
+            label = { it.label },
+            onSelect = { onSortField(it); showSortSheet = false },
+            onDismiss = { showSortSheet = false },
+        )
+    }
+}
+
+@Composable
+private fun SortControl(
+    field: LibrarySortField,
+    ascending: Boolean,
+    onPickField: () -> Unit,
+    onToggleDirection: () -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onPickField)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                TacitIcons.Sort, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                field.label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        Box(
+            Modifier
+                .padding(horizontal = 2.dp)
+                .size(width = 1.dp, height = 16.dp)
+                .background(MaterialTheme.colorScheme.outlineVariant)
+        )
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onToggleDirection)
+                .padding(8.dp),
+        ) {
+            Icon(
+                TacitIcons.ArrowUp,
+                contentDescription = if (ascending) "Sorted oldest first; tap for newest first"
+                else "Sorted newest first; tap for oldest first",
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .size(16.dp)
+                    .graphicsLayer { rotationZ = if (ascending) 0f else 180f },
+            )
         }
     }
 }
