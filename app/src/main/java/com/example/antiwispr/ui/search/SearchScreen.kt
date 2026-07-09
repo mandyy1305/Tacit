@@ -20,35 +20,27 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -63,18 +55,13 @@ import com.example.antiwispr.SearchEngine
 import com.example.antiwispr.SearchFilters
 import com.example.antiwispr.SearchHit
 import com.example.antiwispr.StoredTranscript
-import com.example.antiwispr.Summarizer
 import com.example.antiwispr.Transcripts
-import com.example.antiwispr.parseAskAnswer
 import com.example.antiwispr.ui.components.OptionPickerSheet
-import com.example.antiwispr.ui.components.ProgressCapsule
-import com.example.antiwispr.ui.components.SectionHeader
 import com.example.antiwispr.ui.components.TranscriptCard
 import com.example.antiwispr.ui.theme.Dimens
 import java.util.Calendar
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Day-granular presets for the date filter chip. */
@@ -93,15 +80,15 @@ private enum class DatePreset(val label: String, val days: Int) {
 }
 
 /**
- * The searchable history: ranked cross-script search over every transcript (Search mode)
- * and LLM answers grounded in them (Ask mode). Filters constrain both.
+ * Ranked cross-script search over the transcript library, reached from the Library tab. Free-form
+ * questions live in the Ask tab now; this screen is purely "find the note". Filters (sender, date)
+ * constrain the results.
  */
 @Composable
 fun SearchScreen(
     query: String,
     onQueryChange: (String) -> Unit,
     chainKeys: Set<String> = emptySet(),
-    initialAsk: Boolean = false,
     onBack: () -> Unit,
     onOpen: (StoredTranscript) -> Unit,
 ) {
@@ -109,7 +96,6 @@ fun SearchScreen(
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
-    var mode by rememberSaveable { mutableIntStateOf(if (initialAsk) 1 else 0) } // 0 = Search, 1 = Ask
     var senderFilter by rememberSaveable { mutableStateOf<String?>(null) }
     var datePreset by rememberSaveable { mutableStateOf(DatePreset.ANY) }
     val filters = remember(senderFilter, datePreset) {
@@ -126,36 +112,13 @@ fun SearchScreen(
         }
     }
 
-    // ---- search mode results (debounced; transliteration must stay off main) ----
+    // Debounced; transliteration must stay off the main thread.
     val trimmed = query.trim()
-    val results by produceState(emptyList<SearchHit>(), trimmed, filters, mode) {
-        if (mode != 0 || trimmed.length < 2) { value = emptyList(); return@produceState }
+    val results by produceState(emptyList<SearchHit>(), trimmed, filters) {
+        if (trimmed.length < 2) { value = emptyList(); return@produceState }
         delay(150) // a new keystroke restarts the producer, cancelling the pending scan
         value = withContext(Dispatchers.Default) {
             SearchEngine.search(Transcripts.get(context).all(), trimmed, filters, limit = 100)
-        }
-    }
-
-    // ---- ask mode state ----
-    var askBusy by remember { mutableStateOf(false) }
-    var askStatus by remember { mutableStateOf("") }
-    var askRaw by remember { mutableStateOf<String?>(null) }
-    var askHits by remember { mutableStateOf<List<SearchHit>>(emptyList()) }
-    val scope = rememberCoroutineScope()
-    fun runAsk() {
-        val q = query.trim()
-        if (q.length < 3 || askBusy) return
-        askBusy = true
-        askRaw = null
-        scope.launch {
-            askStatus = "Finding the right notes…"
-            val hits = withContext(Dispatchers.Default) {
-                SearchEngine.retrieveForAsk(Transcripts.get(context).all(), q, filters)
-            }
-            askHits = hits
-            askStatus = "Reading ${hits.size} note${if (hits.size == 1) "" else "s"}…"
-            askRaw = withContext(Dispatchers.IO) { Summarizer.askBlocking(context, q, hits) }
-            askBusy = false
         }
     }
 
@@ -185,7 +148,7 @@ fun SearchScreen(
                         .focusRequester(focusRequester),
                     placeholder = {
                         Text(
-                            if (mode == 0) "Search your notes…" else "Ask about your notes…",
+                            "Search your notes…",
                             style = MaterialTheme.typography.headlineSmall,
                             color = MaterialTheme.colorScheme.outline,
                         )
@@ -193,7 +156,7 @@ fun SearchScreen(
                     textStyle = MaterialTheme.typography.headlineSmall,
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { if (mode == 1) runAsk() }),
+                    keyboardActions = KeyboardActions(onSearch = {}),
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,
@@ -213,32 +176,21 @@ fun SearchScreen(
             }
 
             Row(
-                Modifier.padding(horizontal = Dimens.screenPad),
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Dimens.screenPad),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ModePills(mode, onSelect = { mode = it })
                 Spacer(Modifier.weight(1f))
                 FilterChip(senderFilter ?: "Anyone", active = senderFilter != null) { showSenderSheet = true }
                 FilterChip(datePreset.label, active = datePreset != DatePreset.ANY) { showDateSheet = true }
             }
             Spacer(Modifier.height(6.dp))
 
-            if (mode == 0) {
-                SearchResults(trimmed, results, chainKeys, onOpen) { text ->
-                    context.getSystemService(ClipboardManager::class.java)
-                        ?.setPrimaryClip(ClipData.newPlainText("TACIT transcript", text))
-                }
-            } else {
-                AskPane(
-                    busy = askBusy,
-                    status = askStatus,
-                    raw = askRaw,
-                    hits = askHits,
-                    chainKeys = chainKeys,
-                    onAsk = { runAsk() },
-                    onOpen = onOpen,
-                )
+            SearchResults(trimmed, results, chainKeys, onOpen) { text ->
+                context.getSystemService(ClipboardManager::class.java)
+                    ?.setPrimaryClip(ClipData.newPlainText("TACIT transcript", text))
             }
         }
     }
@@ -315,133 +267,6 @@ private fun SearchResults(
                         )
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AskPane(
-    busy: Boolean,
-    status: String,
-    raw: String?,
-    hits: List<SearchHit>,
-    chainKeys: Set<String>,
-    onAsk: () -> Unit,
-    onOpen: (StoredTranscript) -> Unit,
-) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Dimens.screenPad),
-    ) {
-        when {
-            busy -> {
-                Spacer(Modifier.height(18.dp))
-                ProgressCapsule(null, status)
-            }
-            raw == null -> {
-                Spacer(Modifier.height(48.dp))
-                Text(
-                    "Ask in your own words.\n\"kya address bheja tha Rahul ne last week?\"\n\n" +
-                        "TACIT reads your matching notes and answers from them. " +
-                        "Press search to ask.",
-                    modifier = Modifier.fillMaxWidth(),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.outline,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
-            }
-            raw.startsWith("[") -> {
-                Spacer(Modifier.height(18.dp))
-                Text(
-                    raw.trim('[', ']'),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(10.dp))
-                Row(
-                    Modifier
-                        .clickable(onClick = onAsk)
-                        .padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Try again",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Icon(
-                        Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            }
-            else -> {
-                val parsed = remember(raw) { parseAskAnswer(raw) }
-                Spacer(Modifier.height(14.dp))
-                Surface(
-                    shape = MaterialTheme.shapes.medium,
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
-                ) {
-                    SelectionContainer {
-                        Text(
-                            parsed.answer,
-                            modifier = Modifier.padding(16.dp),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onBackground,
-                        )
-                    }
-                }
-                val cited = remember(raw, hits) {
-                    parsed.sources.mapNotNull { n -> hits.getOrNull(n - 1) }
-                        .distinctBy { it.transcript.key }
-                        .ifEmpty { hits }
-                }
-                if (cited.isNotEmpty()) {
-                    Spacer(Modifier.height(18.dp))
-                    SectionHeader("From your notes")
-                    Spacer(Modifier.height(8.dp))
-                    cited.forEach { hit ->
-                        TranscriptCard(
-                            hit.transcript,
-                            chained = hit.transcript.key in chainKeys,
-                            onClick = { onOpen(hit.transcript) },
-                            modifier = Modifier.padding(bottom = Dimens.itemGap),
-                        )
-                    }
-                }
-                Spacer(Modifier.height(32.dp))
-            }
-        }
-    }
-}
-
-@Composable
-private fun ModePills(selected: Int, onSelect: (Int) -> Unit) {
-    Row(
-        Modifier
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(12.dp))
-            .padding(3.dp)
-    ) {
-        listOf("Search", "Ask").forEachIndexed { i, label ->
-            val active = i == selected
-            Box(
-                Modifier
-                    .background(
-                        if (active) MaterialTheme.colorScheme.primary else Color.Transparent,
-                        RoundedCornerShape(9.dp),
-                    )
-                    .clickable { onSelect(i) }
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-            ) {
-                Text(
-                    label,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (active) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
     }

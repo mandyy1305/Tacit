@@ -12,6 +12,7 @@ import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import android.widget.Toast
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -28,7 +29,10 @@ import com.example.antiwispr.IndexHolder
 import com.example.antiwispr.LlmModel
 import com.example.antiwispr.ProjectionService
 import com.example.antiwispr.SearchEngine
+import com.example.antiwispr.SearchFilters
 import com.example.antiwispr.StoredTranscript
+import com.example.antiwispr.Summarizer
+import com.example.antiwispr.parseAskAnswer
 import com.example.antiwispr.Toggles
 import com.example.antiwispr.TranscribeRouter
 import com.example.antiwispr.Transcripts
@@ -127,6 +131,18 @@ data class SetupStatus(
 /** The five macro states of readiness (doc 01 §0). Home renders exactly one. */
 enum class SetupHealth { OFF, NEEDS_SETUP, ATTENTION, GETTING_READY, READY }
 
+enum class AskRole { User, Assistant }
+
+/** One turn in the Ask tab's chat thread. Assistant turns may carry the notes the answer
+ *  was drawn from (rendered as source cards) and a [pending] flag while the model works. */
+data class AskMessage(
+    val role: AskRole,
+    val text: String,
+    val sources: List<StoredTranscript> = emptyList(),
+    val pending: Boolean = false,
+    val error: Boolean = false,
+)
+
 enum class ToggleKey { DiagnosticMode, PauseOnPlay, Orchestration, MicFallback, PauseOnMatch }
 
 /**
@@ -160,6 +176,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     var searchQuery by mutableStateOf("")
 
+    /** The Ask tab's chat thread. Hoisted here (not screen-local) so it survives tab switches
+     *  and recomposition; each turn is answered independently from the note library. */
+    val askMessages = mutableStateListOf<AskMessage>()
+
+    /** True while an Ask answer is being retrieved + generated (composer disabled meanwhile). */
+    var askBusy by mutableStateOf(false)
+        private set
+
     /** Detail-screen selection. Store keys contain '/' and '|' — never a nav argument. */
     var selectedTranscript by mutableStateOf<StoredTranscript?>(null)
 
@@ -169,9 +193,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Set by MainActivity from a launcher shortcut (search / ask / library); AppRoot navigates. */
     var pendingDest by mutableStateOf<String?>(null)
-
-    /** Seeds the Search screen into Ask mode (set true by the Ask shortcut, cleared on plain open). */
-    var searchStartAsk: Boolean = false
 
     init {
         AppLog.i("=== TACIT — every voice note, read ===")
@@ -521,6 +542,52 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun folderReport(): String = VoiceNotes.report()
+
+    // ---- Ask (chat tab) ------------------------------------------------------------
+    // Each question is answered independently: retrieve the most relevant notes, then let
+    // the LLM (cloud gpt-4o-mini or on-device Qwen) answer from them. Messages accumulate in
+    // [askMessages] so the tab reads as a running conversation.
+
+    fun ask(input: String) {
+        val q = input.trim()
+        if (q.length < 3 || askBusy) return
+        val ctx = getApplication<Application>().applicationContext
+        askMessages.add(AskMessage(AskRole.User, q))
+        val slot = askMessages.size
+        askMessages.add(AskMessage(AskRole.Assistant, "Finding the right notes…", pending = true))
+        askBusy = true
+        viewModelScope.launch {
+            val hits = withContext(Dispatchers.Default) {
+                SearchEngine.retrieveForAsk(Transcripts.get(ctx).all(), q, SearchFilters())
+            }
+            if (slot < askMessages.size) {
+                val n = hits.size
+                askMessages[slot] = AskMessage(
+                    AskRole.Assistant,
+                    "Reading $n note${if (n == 1) "" else "s"}…",
+                    pending = true,
+                )
+            }
+            val raw = withContext(Dispatchers.IO) { Summarizer.askBlocking(ctx, q, hits) }
+            val answer = if (raw.startsWith("[")) {
+                AskMessage(AskRole.Assistant, raw.trim('[', ']'), error = true)
+            } else {
+                val parsed = parseAskAnswer(raw)
+                // Show ONLY the notes the model actually cited. No fallback to "all retrieved" —
+                // a negative answer ("SOURCES: none") must show no source cards, not the whole pile.
+                val cited = parsed.sources.mapNotNull { hits.getOrNull(it - 1)?.transcript }
+                    .distinctBy { it.key }
+                AskMessage(AskRole.Assistant, parsed.answer, sources = cited)
+            }
+            if (slot < askMessages.size) askMessages[slot] = answer
+            askBusy = false
+        }
+    }
+
+    fun clearAsk() {
+        if (askBusy) return
+        askMessages.clear()
+    }
 
     // ---- checks (ported verbatim from the old MainActivity) ------------------------
 

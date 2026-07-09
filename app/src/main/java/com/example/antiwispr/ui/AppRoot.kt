@@ -16,20 +16,41 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.antiwispr.AppLog
 import com.example.antiwispr.ProjectionService
@@ -37,6 +58,9 @@ import com.example.antiwispr.Toggles
 import com.example.antiwispr.Transcripts
 import com.example.antiwispr.cloud.CloudAuth
 import kotlinx.coroutines.launch
+import com.example.antiwispr.ui.ask.AskScreen
+import com.example.antiwispr.ui.components.InkDivider
+import com.example.antiwispr.ui.components.TacitIcons
 import com.example.antiwispr.ui.home.HomeScreen
 import com.example.antiwispr.ui.library.LibraryScreen
 import com.example.antiwispr.ui.onboarding.OnboardingScreen
@@ -58,8 +82,18 @@ class SetupActions(
     val startSession: () -> Unit,
     val stopSession: () -> Unit,
     val turnOn: () -> Unit,
+    val turnOff: () -> Unit,
     val signIn: () -> Unit,
 )
+
+/** The three top-level tabs shown in the bottom navigation bar. */
+private enum class Tab(val route: String, val label: String, val icon: ImageVector) {
+    Home("home", "Home", TacitIcons.Home),
+    Library("library", "Library", TacitIcons.Library),
+    Ask("ask", "Ask", TacitIcons.Ask),
+}
+
+private val TAB_ROUTES = Tab.entries.map { it.route }.toSet()
 
 @Composable
 fun AppRoot(vm: AppViewModel = viewModel()) {
@@ -143,6 +177,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
             },
             stopSession = { vm.stopSession() },
             turnOn = { vm.setTacitEnabled(true) },
+            turnOff = { vm.setTacitEnabled(false) },
             signIn = {
                 scope.launch {
                     CloudAuth.signIn(context)
@@ -157,6 +192,15 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
     LifecycleResumeEffect(Unit) {
         vm.onResumed()
         onPauseOrDispose { }
+    }
+
+    // Switch top-level tabs: single-top, and save/restore each tab's own back stack + scroll.
+    val selectTab: (String) -> Unit = { route ->
+        nav.navigate(route) {
+            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
     }
 
     // Deep link from a "transcript ready" notification (MainActivity set the key): resolve the
@@ -175,9 +219,9 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
     val pendingDest = vm.pendingDest
     LaunchedEffect(pendingDest) {
         when (pendingDest) {
-            "search" -> { vm.searchStartAsk = false; nav.navigate("search") }
-            "ask" -> { vm.searchStartAsk = true; nav.navigate("search") }
-            "library" -> nav.navigate("library")
+            "search" -> nav.navigate("search")
+            "ask" -> selectTab("ask")
+            "library" -> selectTab("library")
         }
         if (pendingDest != null) vm.pendingDest = null
     }
@@ -186,90 +230,174 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
         if (Toggles.onboardingDone || vm.setup.value.setupComplete) "home" else "onboarding"
     }
 
-    NavHost(
-        navController = nav,
-        startDestination = start,
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
-        enterTransition = {
-            fadeIn(tween(240)) + slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { it / 10 }
-        },
-        exitTransition = { fadeOut(tween(120)) },
-        popEnterTransition = {
-            fadeIn(tween(240)) + slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { -it / 10 }
-        },
-        popExitTransition = {
-            fadeOut(tween(120)) + slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { it / 10 }
-        },
+    val backStackEntry by nav.currentBackStackEntryAsState()
+    val currentRoute = backStackEntry?.destination?.route
+    val showBottomBar = currentRoute in TAB_ROUTES
+
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        containerColor = MaterialTheme.colorScheme.background,
+        // The tab screens own their status-bar/side insets; the bar owns the bottom. Keep this
+        // outer Scaffold inset-neutral so nothing is double-counted.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        bottomBar = { if (showBottomBar) TacitBottomBar(currentRoute, selectTab) },
+    ) { innerPadding ->
+        NavHost(
+            navController = nav,
+            startDestination = start,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                // Mark the bar's space as consumed so a tab's imePadding() lifts the content by
+                // (ime − bar), not (ime + bar) — otherwise the keyboard leaves a bar-sized gap.
+                .consumeWindowInsets(innerPadding)
+                .background(MaterialTheme.colorScheme.background),
+            // Detail screens slide in (drill-down); tabs crossfade (see per-tab overrides).
+            enterTransition = {
+                fadeIn(tween(240)) + slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { it / 10 }
+            },
+            exitTransition = { fadeOut(tween(120)) },
+            popEnterTransition = {
+                fadeIn(tween(240)) + slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { -it / 10 }
+            },
+            popExitTransition = {
+                fadeOut(tween(120)) + slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { it / 10 }
+            },
+        ) {
+            composable("onboarding") {
+                OnboardingScreen(
+                    setup = setup,
+                    actions = actions,
+                    onFinished = {
+                        vm.markOnboardingDone()
+                        nav.navigate("home") { popUpTo(0) { inclusive = true } }
+                    },
+                )
+            }
+            composable(
+                "home",
+                enterTransition = { fadeIn(tween(180)) },
+                exitTransition = { fadeOut(tween(140)) },
+                popEnterTransition = { fadeIn(tween(180)) },
+                popExitTransition = { fadeOut(tween(140)) },
+            ) {
+                HomeScreen(
+                    setup = setup,
+                    recents = recents,
+                    chainKeys = chainKeys,
+                    actions = actions,
+                    onOpenSettings = { nav.navigate("settings") },
+                    onOpenLibrary = { selectTab("library") },
+                    onOpenTranscript = { vm.selectedTranscript = it; nav.navigate("transcript") },
+                    onFinishSetup = { nav.navigate("onboarding") },
+                )
+            }
+            composable(
+                "library",
+                enterTransition = { fadeIn(tween(180)) },
+                exitTransition = { fadeOut(tween(140)) },
+                popEnterTransition = { fadeIn(tween(180)) },
+                popExitTransition = { fadeOut(tween(140)) },
+            ) {
+                LibraryScreen(
+                    library = history,
+                    chainKeys = chainKeys,
+                    onOpen = { vm.selectedTranscript = it; nav.navigate("transcript") },
+                    onOpenSearch = { nav.navigate("search") },
+                    onDelete = { vm.softDelete(it) },
+                    onUndoDelete = { vm.undoDelete() },
+                    onCommitDelete = { vm.commitPendingDeletes() },
+                )
+            }
+            composable(
+                "ask",
+                enterTransition = { fadeIn(tween(180)) },
+                exitTransition = { fadeOut(tween(140)) },
+                popEnterTransition = { fadeIn(tween(180)) },
+                popExitTransition = { fadeOut(tween(140)) },
+            ) {
+                AskScreen(
+                    messages = vm.askMessages,
+                    busy = vm.askBusy,
+                    chainKeys = chainKeys,
+                    onSend = { vm.ask(it) },
+                    onClear = { vm.clearAsk() },
+                    onOpen = { vm.selectedTranscript = it; nav.navigate("transcript") },
+                )
+            }
+            composable("search") {
+                SearchScreen(
+                    query = vm.searchQuery,
+                    onQueryChange = { vm.searchQuery = it },
+                    chainKeys = chainKeys,
+                    onBack = { nav.popBackStack() },
+                    onOpen = { vm.selectedTranscript = it; nav.navigate("transcript") },
+                )
+            }
+            composable("transcript") {
+                TranscriptDetailScreen(
+                    transcript = vm.selectedTranscript,
+                    onBack = { nav.popBackStack() },
+                    onDelete = { vm.deleteTranscript(it) }, // screen pops itself via the null guard
+                    onRetranscribe = { vm.retranscribe(it) },
+                    retranscribing = vm.retranscribing,
+                    onOpenSettings = { nav.navigate("settings") },
+                    onOpenNote = { vm.selectedTranscript = it }, // swap the reader to a linked chain note in place
+                    onChainChanged = { vm.refresh() },           // detach/re-attach → refresh badges
+                )
+            }
+            composable("settings") {
+                SettingsScreen(
+                    setup = setup,
+                    vm = vm,
+                    onBack = { nav.popBackStack() },
+                    onOpenLog = { nav.navigate("log") },
+                )
+            }
+            composable("log") {
+                LogScreen(onBack = { nav.popBackStack() })
+            }
+        }
+    }
+}
+
+/**
+ * Compact, Swiggy-style bottom bar: a hairline, then a short row of icon+label items. The active
+ * tab is simply tinted (no chunky pill), which keeps the bar low. The bar owns the gesture-nav
+ * inset at its bottom; AppRoot consumes that space so a tab's imePadding stays flush.
+ */
+@Composable
+private fun TacitBottomBar(currentRoute: String?, onSelect: (String) -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .navigationBarsPadding(),
     ) {
-        composable("onboarding") {
-            OnboardingScreen(
-                setup = setup,
-                actions = actions,
-                onFinished = {
-                    vm.markOnboardingDone()
-                    nav.navigate("home") { popUpTo(0) { inclusive = true } }
-                },
-            )
-        }
-        composable("home") {
-            HomeScreen(
-                setup = setup,
-                recents = recents,
-                chainKeys = chainKeys,
-                actions = actions,
-                onOpenSettings = { nav.navigate("settings") },
-                onOpenSearch = { vm.searchStartAsk = false; nav.navigate("search") },
-                onOpenLibrary = { nav.navigate("library") },
-                onOpenTranscript = { vm.selectedTranscript = it; nav.navigate("transcript") },
-                onFinishSetup = { nav.navigate("onboarding") },
-            )
-        }
-        composable("library") {
-            LibraryScreen(
-                library = history,
-                chainKeys = chainKeys,
-                onBack = { nav.popBackStack() },
-                onOpen = { vm.selectedTranscript = it; nav.navigate("transcript") },
-                onOpenSearch = { vm.searchStartAsk = false; nav.navigate("search") },
-                onDelete = { vm.softDelete(it) },
-                onUndoDelete = { vm.undoDelete() },
-                onCommitDelete = { vm.commitPendingDeletes() },
-            )
-        }
-        composable("search") {
-            SearchScreen(
-                query = vm.searchQuery,
-                onQueryChange = { vm.searchQuery = it },
-                chainKeys = chainKeys,
-                initialAsk = vm.searchStartAsk,
-                onBack = { nav.popBackStack() },
-                onOpen = { vm.selectedTranscript = it; nav.navigate("transcript") },
-            )
-        }
-        composable("transcript") {
-            TranscriptDetailScreen(
-                transcript = vm.selectedTranscript,
-                onBack = { nav.popBackStack() },
-                onDelete = { vm.deleteTranscript(it) }, // screen pops itself via the null guard
-                onRetranscribe = { vm.retranscribe(it) },
-                retranscribing = vm.retranscribing,
-                onOpenSettings = { nav.navigate("settings") },
-                onOpenNote = { vm.selectedTranscript = it }, // swap the reader to a linked chain note in place
-                onChainChanged = { vm.refresh() },           // detach/re-attach → refresh badges
-            )
-        }
-        composable("settings") {
-            SettingsScreen(
-                setup = setup,
-                vm = vm,
-                onBack = { nav.popBackStack() },
-                onOpenLog = { nav.navigate("log") },
-            )
-        }
-        composable("log") {
-            LogScreen(onBack = { nav.popBackStack() })
+        InkDivider()
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Tab.entries.forEach { tab ->
+                val selected = currentRoute == tab.route
+                val tint = if (selected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable { if (!selected) onSelect(tab.route) },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Icon(tab.icon, contentDescription = tab.label, tint = tint, modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.height(3.dp))
+                    Text(tab.label, style = MaterialTheme.typography.labelSmall, color = tint)
+                }
+            }
         }
     }
 }

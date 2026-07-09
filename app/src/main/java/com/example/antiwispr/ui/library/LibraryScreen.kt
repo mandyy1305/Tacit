@@ -13,17 +13,20 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -75,7 +78,6 @@ import kotlinx.coroutines.launch
 fun LibraryScreen(
     library: List<StoredTranscript>,
     chainKeys: Set<String> = emptySet(),
-    onBack: () -> Unit,
     onOpen: (StoredTranscript) -> Unit,
     onOpenSearch: () -> Unit = {},
     onDelete: (List<StoredTranscript>) -> Unit = {},
@@ -135,6 +137,8 @@ fun LibraryScreen(
 
     Scaffold(
         containerColor = Color.Transparent,
+        // Top-level tab: the bottom bar owns the bottom inset, so take only top + sides here.
+        contentWindowInsets = WindowInsets.systemBars.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
         snackbarHost = { SnackbarHost(snackbar) },
     ) { pad ->
         Column(
@@ -152,15 +156,9 @@ fun LibraryScreen(
                 )
             } else {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                    Modifier.fillMaxWidth().padding(start = Dimens.screenPad, end = 8.dp, top = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
                     Text(
                         "Library",
                         modifier = Modifier.weight(1f),

@@ -238,4 +238,125 @@ object TacitIcons {
             }
         }.build()
     }
+
+    /** House (outline) — the Home tab. */
+    val Home: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "tacit.home", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.7f,
+                strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                // Roof
+                moveTo(4f, 10.5f)
+                lineTo(12f, 4f)
+                lineTo(20f, 10.5f)
+                // Walls
+                moveTo(6f, 9.2f)
+                lineTo(6f, 20f)
+                lineTo(18f, 20f)
+                lineTo(18f, 9.2f)
+            }
+        }.build()
+    }
+
+    /** A card over a shrinking stack — the Library tab. */
+    val Library: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "tacit.library", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.7f,
+                strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                // Top card
+                moveTo(6f, 4.5f)
+                lineTo(16f, 4.5f)
+                curveTo(16.55f, 4.5f, 17f, 4.95f, 17f, 5.5f)
+                lineTo(17f, 15f)
+                curveTo(17f, 15.55f, 16.55f, 16f, 16f, 16f)
+                lineTo(6f, 16f)
+                curveTo(5.45f, 16f, 5f, 15.55f, 5f, 15f)
+                lineTo(5f, 5.5f)
+                curveTo(5f, 4.95f, 5.45f, 4.5f, 6f, 4.5f)
+                close()
+                // Stack beneath
+                moveTo(7.5f, 18.5f)
+                lineTo(16.5f, 18.5f)
+                moveTo(9f, 21f)
+                lineTo(15f, 21f)
+            }
+        }.build()
+    }
+
+    /** Speech bubble with a tail — the AI Ask tab. */
+    val Ask: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "tacit.ask", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.7f,
+                strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(8f, 5f)
+                lineTo(16f, 5f)
+                curveTo(17.66f, 5f, 19f, 6.34f, 19f, 8f)
+                lineTo(19f, 12f)
+                curveTo(19f, 13.66f, 17.66f, 15f, 16f, 15f)
+                lineTo(9f, 15f)
+                lineTo(6f, 18.5f)
+                lineTo(6.9f, 15f)
+                curveTo(5.85f, 14.9f, 5f, 13.55f, 5f, 12f)
+                lineTo(5f, 8f)
+                curveTo(5f, 6.34f, 6.34f, 5f, 8f, 5f)
+                close()
+            }
+        }.build()
+    }
+
+    /** Power symbol (arc + break) — the medallion's dormant/off face. */
+    val Power: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "tacit.power", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                // Vertical break
+                moveTo(12f, 3.5f)
+                lineTo(12f, 11.5f)
+                // Ring, open at the top
+                moveTo(8.4f, 6.7f)
+                curveTo(6.2f, 8.2f, 4.8f, 10.7f, 4.8f, 13.6f)
+                curveTo(4.8f, 17.6f, 8f, 20.8f, 12f, 20.8f)
+                curveTo(16f, 20.8f, 19.2f, 17.6f, 19.2f, 13.6f)
+                curveTo(19.2f, 10.7f, 17.8f, 8.2f, 15.6f, 6.7f)
+            }
+        }.build()
+    }
+
+    /** Upward arrow — the Ask composer's send action. */
+    val Send: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "tacit.send", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(12f, 20f)
+                lineTo(12f, 5f)
+                moveTo(6f, 11f)
+                lineTo(12f, 5f)
+                lineTo(18f, 11f)
+            }
+        }.build()
+    }
 }
