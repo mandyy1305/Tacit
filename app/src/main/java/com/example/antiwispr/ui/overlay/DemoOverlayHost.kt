@@ -11,7 +11,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.delay
 import kotlin.math.sin
 
@@ -52,18 +51,18 @@ fun DemoOverlayHost(modifier: Modifier = Modifier, replayKey: Int = 0) {
         }
     }
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-        // Dark-locked, like the real overlay; ~90% scale so it reads as a framed preview.
+        // Dark-locked, like the real overlay; rendered inline with no window and no coach lanes
+        // (those transparent tooltip lanes only make sense over WhatsApp, not in this framed demo).
         TacitOverlayTheme {
-            Box(Modifier.graphicsLayer { scaleX = 0.9f; scaleY = 0.9f }) {
-                TacitOverlayCard(
-                    state = state,
-                    audioLevels = demoLevels,
-                    onClose = {},
-                    onShare = {},
-                    onCopy = {},
-                    onExitFinished = {},
-                )
-            }
+            TacitOverlayCard(
+                state = state,
+                audioLevels = demoLevels,
+                coachRoom = false,
+                onClose = {},
+                onShare = {},
+                onCopy = {},
+                onExitFinished = {},
+            )
         }
     }
 }

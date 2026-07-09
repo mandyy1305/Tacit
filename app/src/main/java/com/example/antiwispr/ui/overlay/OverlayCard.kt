@@ -2,7 +2,6 @@ package com.example.antiwispr.ui.overlay
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.MutableTransitionState
@@ -49,7 +48,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -135,6 +133,7 @@ fun TacitOverlayCard(
     onEntityTap: (ActionEntity) -> Unit = {},
     onNoticeAction: (NoticeAction) -> Unit = {},
     onListenAgain: () -> Unit = {},
+    coachRoom: Boolean = true, // false = inline demo: drop the transparent tooltip lanes
     onExitFinished: () -> Unit,
 ) {
     val enterState = remember { MutableTransitionState(false) }
@@ -220,20 +219,22 @@ fun TacitOverlayCard(
             // TOP coach-mark lane — transparent room ABOVE the card. Share/swipe tooltips float here
             // (over WhatsApp, never covering the card's content); the window reserves matching room
             // so nothing clips. Bottom-aligned so the caret sits just above the card's top edge.
-            Box(Modifier.fillMaxWidth().height(COACH_ROOM)) {
-                if (showShare) {
-                    CoachTip(
-                        "Share your screen for surer matches.",
-                        caretDown = true, caretAtStart = true,
-                        modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 3.dp),
-                    )
-                }
-                if (showSwipe) {
-                    CoachTip(
-                        "Swipe to read the next note.",
-                        caretDown = true, caretAtStart = true,
-                        modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 3.dp),
-                    )
+            if (coachRoom) {
+                Box(Modifier.fillMaxWidth().height(COACH_ROOM)) {
+                    if (showShare) {
+                        CoachTip(
+                            "Share your screen for surer matches.",
+                            caretDown = true, caretAtStart = true,
+                            modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 3.dp),
+                        )
+                    }
+                    if (showSwipe) {
+                        CoachTip(
+                            "Swipe to read the next note.",
+                            caretDown = true, caretAtStart = true,
+                            modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 3.dp),
+                        )
+                    }
                 }
             }
 
@@ -261,7 +262,7 @@ fun TacitOverlayCard(
                 ) { phase ->
                     when (phase) {
                         OverlayPhase.LISTENING -> ListeningBody(state, audioLevels)
-                        OverlayPhase.MATCHED -> MatchedBody(state)
+                        OverlayPhase.MATCHED -> TranscribingShimmer()
                         OverlayPhase.TRANSCRIBING -> TranscribingBody(state)
                         OverlayPhase.TRANSCRIPT -> TranscriptBody(
                             state, current, view, { view = it }, goToPart, onCopy, onRequestSummary, onEntityTap, onAiUsed,
@@ -275,13 +276,15 @@ fun TacitOverlayCard(
             // BOTTOM coach-mark lane — transparent room BELOW the card. The AI-summary tooltip floats
             // here, under its button, so it never covers the transcript. Top-aligned so the caret
             // sits just below the card's bottom edge.
-            Box(Modifier.fillMaxWidth().height(COACH_ROOM)) {
-                if (showAi) {
-                    CoachTip(
-                        "Long note. Tap to summarise.",
-                        caretDown = false, caretAtStart = false,
-                        modifier = Modifier.align(Alignment.TopEnd).padding(end = 8.dp, top = 3.dp),
-                    )
+            if (coachRoom) {
+                Box(Modifier.fillMaxWidth().height(COACH_ROOM)) {
+                    if (showAi) {
+                        CoachTip(
+                            "Long note. Tap to summarise.",
+                            caretDown = false, caretAtStart = false,
+                            modifier = Modifier.align(Alignment.TopEnd).padding(end = 8.dp, top = 3.dp),
+                        )
+                    }
                 }
             }
         }
@@ -575,67 +578,10 @@ private fun ListeningBody(state: OverlayUiState, audioLevels: List<Float>) {
     }
 }
 
-/** Check in an amber ring; bounces only when [animate] (the moment the match lands). */
-@Composable
-private fun MatchBadge(animate: Boolean) {
-    val scale = remember { Animatable(if (animate) 0.5f else 1f) }
-    if (animate) {
-        LaunchedEffect(Unit) {
-            scale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
-        }
-    }
-    Box(
-        Modifier
-            .size(30.dp)
-            .graphicsLayer { scaleX = scale.value; scaleY = scale.value }
-            .clip(CircleShape)
-            .background(OverlayPalette.accent.copy(alpha = 0.16f))
-            .border(1.dp, OverlayPalette.accent.copy(alpha = 0.4f), CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            Icons.Filled.Check, contentDescription = null,
-            tint = OverlayPalette.accent, modifier = Modifier.size(16.dp),
-        )
-    }
-}
-
-/**
- * The matched row: badge, MATCHED overline, then the note's date · duration as the
- * main line (the header already says "Voice note" — no need to repeat it).
- */
-@Composable
-private fun MatchLine(state: OverlayUiState, animateBadge: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        MatchBadge(animateBadge)
-        Spacer(Modifier.width(12.dp))
-        Column {
-            Text(
-                "MATCHED",
-                fontFamily = Inter, fontWeight = FontWeight.SemiBold,
-                fontSize = 10.sp, letterSpacing = 1.5.sp,
-                color = OverlayPalette.mint,
-            )
-            val meta = state.match?.meta ?: "Voice note"
-            Text(
-                if (state.chainCount > 1) "Part ${state.chainPart} of ${state.chainCount}  ·  $meta" else meta,
-                fontFamily = Inter, fontWeight = FontWeight.Medium,
-                fontSize = 14.sp, color = OverlayPalette.ink,
-            )
-        }
-    }
-}
-
-@Composable
-private fun MatchedBody(state: OverlayUiState) {
-    MatchLine(state, animateBadge = true)
-}
-
+/** Transcribing: just the skeleton shimmer + a quiet caption. No match header / tick / date. */
 @Composable
 private fun TranscribingBody(state: OverlayUiState) {
     Column {
-        MatchLine(state, animateBadge = false)
-        Spacer(Modifier.height(14.dp))
         TranscribingShimmer()
         Spacer(Modifier.height(10.dp))
         Text(
