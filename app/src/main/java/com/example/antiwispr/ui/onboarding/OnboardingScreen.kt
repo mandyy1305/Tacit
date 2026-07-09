@@ -223,15 +223,16 @@ private fun WelcomePage(onContinue: () -> Unit) {
         )
         Spacer(Modifier.height(20.dp))
         // The live demo: the real overlay card, replayed inline (no window, no permission). Fixed
-        // height so the card growing through its states never reflows the page around it.
+        // height so the card growing through its states never reflows the page around it — sized
+        // to fit the tallest (transcript) state without the old empty gutters.
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(380.dp)
+                .height(320.dp)
                 .clip(MaterialTheme.shapes.large)
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .padding(vertical = 16.dp),
-            contentAlignment = Alignment.TopCenter,
+                .padding(16.dp), // equal inset on all four sides
+            contentAlignment = Alignment.Center,
         ) {
             DemoOverlayHost(replayKey = replay)
         }

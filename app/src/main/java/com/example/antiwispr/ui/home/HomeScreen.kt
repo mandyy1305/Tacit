@@ -124,7 +124,7 @@ fun HomeScreen(
             if (recents.isEmpty()) {
                 item(key = "empty") { EmptyRecents() }
             } else {
-                itemsIndexed(recents.take(5), key = { _, t -> t.key }) { i, t ->
+                itemsIndexed(recents.take(2), key = { _, t -> t.key }) { i, t ->
                     val entrance = remember { MutableTransitionState(false).apply { targetState = true } }
                     AnimatedVisibility(
                         visibleState = entrance,
@@ -411,7 +411,7 @@ private fun DetailCard(content: @Composable ColumnScope.() -> Unit) {
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
-        Column(Modifier.padding(Dimens.cardPad), content = content)
+        Column(Modifier.padding(horizontal = Dimens.cardPad, vertical = 10.dp), content = content)
     }
 }
 

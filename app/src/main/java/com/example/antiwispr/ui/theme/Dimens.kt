@@ -7,6 +7,6 @@ object Dimens {
     val sectionGap = 32.dp
     val cardPad = 20.dp
     val itemGap = 12.dp
-    val buttonHeight = 52.dp
+    val buttonHeight = 44.dp
     val hairline = 1.dp
 }
