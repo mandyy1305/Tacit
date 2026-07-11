@@ -40,6 +40,14 @@
 
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
 
+    <!-- Android 11+ package-visibility filter: without this, getPackageInfo("com.whatsapp")
+         throws NameNotFoundException even when WhatsApp is installed, and Home shows the
+         "WhatsApp isn't on this phone" state. w4b is WhatsApp Business (also scanned). -->
+    <queries>
+        <package android:name="com.whatsapp" />
+        <package android:name="com.whatsapp.w4b" />
+    </queries>
+
     <application
         android:name=".app.TacitApp"
         android:allowBackup="true"
