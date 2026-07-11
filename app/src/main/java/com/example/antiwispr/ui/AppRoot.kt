@@ -87,6 +87,7 @@ class SetupActions(
     val stopSession: () -> Unit,
     val turnOn: () -> Unit,
     val turnOff: () -> Unit,
+    val setPrecisionExplained: (Boolean) -> Unit,
     val signIn: () -> Unit,
 )
 
@@ -215,6 +216,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
             stopSession = { vm.stopSession() },
             turnOn = { vm.setTacitEnabled(true) },
             turnOff = { vm.setTacitEnabled(false) },
+            setPrecisionExplained = { vm.setPrecisionExplained(it) },
             signIn = {
                 scope.launch {
                     CloudAuth.signIn(context)

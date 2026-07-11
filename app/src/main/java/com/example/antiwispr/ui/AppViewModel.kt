@@ -93,9 +93,9 @@ data class SetupStatus(
     val backfillProgress: Float? = null,
     val backfillStatus: String = "",
     val sessionActive: Boolean = false,
+    val precisionExplained: Boolean = false,
     val transcriptCount: Int = 0,
     val detection: String = "",
-    val autoRead: Boolean = true,       // mirror of Toggles.orchestrationEnabled (for observability)
     val whatsAppInstalled: Boolean = true,
 ) {
     /** Notifications are deliberately optional (capture works without the FGS notice).
@@ -149,7 +149,7 @@ data class AskMessage(
     val error: Boolean = false,
 )
 
-enum class ToggleKey { DiagnosticMode, PauseOnPlay, Orchestration, MicFallback, PauseOnMatch }
+enum class ToggleKey { DiagnosticMode, PauseOnPlay, MicFallback, PauseOnMatch }
 
 /**
  * Single state holder for the Compose UI. The pipeline singletons expose @Volatile fields,
@@ -278,9 +278,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 BackfillTranscriber.progressDone.toFloat() / BackfillTranscriber.progressTotal else null,
             backfillStatus = BackfillTranscriber.status,
             sessionActive = ProjectionService.sessionActive,
+            precisionExplained = Toggles.precisionExplained,
             transcriptCount = Transcripts.get(ctx).count(),
             detection = DetectionHealth.summary(),
-            autoRead = Toggles.orchestrationEnabled,
             whatsAppInstalled = isWhatsAppInstalled(ctx),
         )
         val all = Transcripts.get(ctx).all()
@@ -442,6 +442,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
+    /** "Don't show again" for the Precision Listening intro — Home then offers Start inline. */
+    fun setPrecisionExplained(v: Boolean) {
+        Toggles.setPrecisionExplained(getApplication<Application>().applicationContext, v)
+        refresh()
+    }
+
     /** Persisted once the onboarding Done screen is reached; the app then always starts on Home. */
     fun markOnboardingDone() {
         Toggles.setOnboardingDone(getApplication<Application>().applicationContext, true)
@@ -452,7 +458,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         when (key) {
             ToggleKey.DiagnosticMode -> Toggles.diagnosticMode = value          // session-scoped
             ToggleKey.PauseOnPlay -> Toggles.pauseOnPlay = value                 // session-scoped
-            ToggleKey.Orchestration -> Toggles.setOrchestration(ctx, value)      // persisted
             ToggleKey.MicFallback -> Toggles.setMicFallback(ctx, value)          // persisted
             ToggleKey.PauseOnMatch -> Toggles.setPauseOnMatch(ctx, value)        // persisted
         }

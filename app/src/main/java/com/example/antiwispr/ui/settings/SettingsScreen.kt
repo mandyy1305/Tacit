@@ -307,11 +307,6 @@ fun SettingsScreen(
                 SectionHeader("Behaviour")
                 Spacer(Modifier.height(4.dp))
                 ToggleRow(
-                    "Transcribe automatically",
-                    "Read every voice note as it plays.",
-                    checked = Toggles.orchestrationEnabled,
-                ) { vm.setToggle(ToggleKey.Orchestration, it) }
-                ToggleRow(
                     "Pause the note once identified",
                     "Pauses WhatsApp playback so you can read instead of listen.",
                     checked = Toggles.pauseOnMatch,

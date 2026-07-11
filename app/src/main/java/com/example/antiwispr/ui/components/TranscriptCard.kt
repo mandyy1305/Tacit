@@ -3,7 +3,6 @@ package com.example.antiwispr.ui.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,10 +52,11 @@ fun TranscriptCard(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .border(BorderStroke(0.5.dp, cs.outlineVariant), cardShape)
+            .clip(cardShape) // clip BEFORE clickable so the tap ripple follows the rounded corners
             .combinedClickable(onClick = onClick, onLongClick = onLongPress),
         shape = cardShape,
         color = cs.surfaceContainerLow,
+        border = BorderStroke(0.5.dp, cs.outlineVariant),
     ) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             // Header: sender (+ chain link) left, group right.

@@ -31,16 +31,17 @@ object Toggles {
 
     // ---- Persisted behaviour preferences -----------------------------------------------------
 
-    /** Run the capture -> match -> transcribe -> overlay flow on a detected play-tap. */
-    @Volatile var orchestrationEnabled: Boolean = true
-        private set
-
     /** When no screen-share session is active at play-tap, fall back to mic capture (lower accuracy). */
     @Volatile var micFallbackEnabled: Boolean = true
         private set
 
     /** When a match is CONFIRMED, pause WhatsApp's playback (click the playing control). */
     @Volatile var pauseOnMatch: Boolean = true
+        private set
+
+    /** True once the user dismissed the Precision Listening intro ("Don't show again"): from then
+     *  the Home CTA shows an inline Start instead of the arrow that opens the explanation sheet. */
+    @Volatile var precisionExplained: Boolean = false
         private set
 
     // ---- Overlay coach-marks: persisted counts of times each tooltip has been shown. A tooltip
@@ -73,9 +74,9 @@ object Toggles {
         val p = prefs(context)
         tacitEnabled = p.getBoolean("tacit_enabled", true)
         onboardingDone = p.getBoolean("onboarding_done", false)
-        orchestrationEnabled = p.getBoolean("orchestration_enabled", true)
         micFallbackEnabled = p.getBoolean("mic_fallback_enabled", true)
         pauseOnMatch = p.getBoolean("pause_on_match", true)
+        precisionExplained = p.getBoolean("precision_explained", false)
         accessibilityConsentMs = p.getLong("a11y_consent_ms", 0L)
         micConsentMs = p.getLong("mic_consent_ms", 0L)
         shareTipCount = p.getInt("share_tip_count", 0)
@@ -92,9 +93,9 @@ object Toggles {
     fun setOnboardingDone(context: Context, v: Boolean) { onboardingDone = v; persist(context, "onboarding_done", v) }
     fun setAccessibilityConsent(context: Context, ms: Long) { accessibilityConsentMs = ms; persistLong(context, "a11y_consent_ms", ms) }
     fun setMicConsent(context: Context, ms: Long) { micConsentMs = ms; persistLong(context, "mic_consent_ms", ms) }
-    fun setOrchestration(context: Context, v: Boolean) { orchestrationEnabled = v; persist(context, "orchestration_enabled", v) }
     fun setMicFallback(context: Context, v: Boolean) { micFallbackEnabled = v; persist(context, "mic_fallback_enabled", v) }
     fun setPauseOnMatch(context: Context, v: Boolean) { pauseOnMatch = v; persist(context, "pause_on_match", v) }
+    fun setPrecisionExplained(context: Context, v: Boolean) { precisionExplained = v; persist(context, "precision_explained", v) }
 
     private fun persist(context: Context, key: String, v: Boolean) {
         prefs(context).edit().putBoolean(key, v).apply()

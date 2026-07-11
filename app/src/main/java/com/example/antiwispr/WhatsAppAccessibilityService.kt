@@ -73,7 +73,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         VoiceNoteWatcher.ensureStarted { IndexHolder.get(applicationContext).loadOrBuild { AppLog.i(it) } }
         AppLog.i("[a11y] SERVICE CONNECTED — bound to com.whatsapp.")
         AppLog.i("[a11y] play control = id '$CONTROL_BTN_ID' (or desc contains 'voice message').")
-        AppLog.i("[a11y] toggles: diagnostic=${Toggles.diagnosticMode}, pauseOnPlay=${Toggles.pauseOnPlay}, orchestration=${Toggles.orchestrationEnabled}")
+        AppLog.i("[a11y] toggles: diagnostic=${Toggles.diagnosticMode}, pauseOnPlay=${Toggles.pauseOnPlay}")
     }
 
     override fun onInterrupt() { AppLog.w("[a11y] onInterrupt()") }
@@ -168,28 +168,24 @@ class WhatsAppAccessibilityService : AccessibilityService() {
             AppLog.i("[a11y] pause toggle: performAction(ACTION_CLICK) returned $ok (confirm it actually paused on screen).")
         }
 
-        if (Toggles.orchestrationEnabled) {
-            val title = currentChatTitle()
-            val sender = senderNameFor(src)
-            // Group note: "Rahul · Family" (who spoke + where). DM / own note / no label: title only.
-            val chatName = when {
-                sender != null && title != null && !sender.equals(title, ignoreCase = true) -> "$sender · $title"
-                sender != null -> sender
-                else -> title
-            }
-            if (chatName != null) AppLog.i("[a11y] chat = \"$chatName\"")
-            // Read the consecutive same-sender voice run around this note straight from the chat —
-            // chat-scoped, so it can't merge across chats the way the filesystem heuristic did.
-            val run = try {
-                voiceRunAround(src)
-            } catch (e: Exception) {
-                AppLog.w("[a11y] voice-run read failed (non-fatal): ${e.message}"); null
-            }
-            if (run != null) AppLog.i("[a11y] voice run: ${run.durations.size} note(s), anchor@${run.anchorIndex}, durs=${run.durations}")
-            orchestrator.onPlayTap(null, timestamp, chatName, run) // duration unused; index identifies the note
-        } else {
-            AppLog.i("[a11y] orchestration disabled — skipping capture/match/transcribe.")
+        val title = currentChatTitle()
+        val sender = senderNameFor(src)
+        // Group note: "Rahul · Family" (who spoke + where). DM / own note / no label: title only.
+        val chatName = when {
+            sender != null && title != null && !sender.equals(title, ignoreCase = true) -> "$sender · $title"
+            sender != null -> sender
+            else -> title
         }
+        if (chatName != null) AppLog.i("[a11y] chat = \"$chatName\"")
+        // Read the consecutive same-sender voice run around this note straight from the chat —
+        // chat-scoped, so it can't merge across chats the way the filesystem heuristic did.
+        val run = try {
+            voiceRunAround(src)
+        } catch (e: Exception) {
+            AppLog.w("[a11y] voice-run read failed (non-fatal): ${e.message}"); null
+        }
+        if (run != null) AppLog.i("[a11y] voice run: ${run.durations.size} note(s), anchor@${run.anchorIndex}, durs=${run.durations}")
+        orchestrator.onPlayTap(null, timestamp, chatName, run) // duration unused; index identifies the note
     }
 
     // In-bubble sender label ids (group chats). Version-dependent — extend from a diagnostic

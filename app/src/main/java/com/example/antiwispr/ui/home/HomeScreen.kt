@@ -14,14 +14,15 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -30,6 +31,7 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -38,19 +40,25 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -59,6 +67,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -96,6 +105,7 @@ fun HomeScreen(
     onOpenTranscript: (StoredTranscript) -> Unit,
     onFinishSetup: () -> Unit,
 ) {
+    var showPrecisionSheet by remember { mutableStateOf(false) }
     Scaffold(
         containerColor = Color.Transparent,
         // The bottom bar (owned by AppRoot) handles the bottom inset; take only top + sides here.
@@ -116,7 +126,9 @@ fun HomeScreen(
             item(key = "hero") { HeroSection(setup, actions, onFinishSetup) }
 
             if (setup.tacitEnabled && setup.coreGrantsOk) {
-                item(key = "precision") { PrecisionRow(setup, actions) }
+                item(key = "precision") {
+                    PrecisionRow(setup, actions, onOpenInfo = { showPrecisionSheet = true })
+                }
             }
 
             item(key = "recentHeader") { RecentHeader(setup, onOpenLibrary) }
@@ -138,6 +150,15 @@ fun HomeScreen(
 
             item(key = "footer") { Footer(setup) }
         }
+    }
+
+    if (showPrecisionSheet) {
+        PrecisionSheet(
+            showDontShowAgain = !setup.precisionExplained,
+            onStart = { actions.startSession(); showPrecisionSheet = false },
+            onDontShowAgain = { actions.setPrecisionExplained(true); showPrecisionSheet = false },
+            onDismiss = { showPrecisionSheet = false },
+        )
     }
 }
 
@@ -307,25 +328,10 @@ private fun ReadyState(setup: SetupStatus) {
     HeroTitle("Listening for voice notes")
     Spacer(Modifier.height(6.dp))
     HeroBody("Play one in WhatsApp. The words appear right there.")
-    Spacer(Modifier.height(14.dp))
-    FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        StatusPill("Detection", if (setup.detectionDegraded) PillState.Attention else PillState.Ok)
-        val transcription = when {
-            setup.modelReady -> "Transcription · on phone"
-            setup.signedIn && setup.cloudTranscription -> "Transcription · Cloud"
-            else -> "Transcription"
-        }
-        StatusPill(transcription, PillState.Ok)
-        if (setup.transcriptCount > 0) {
-            StatusPill("${setup.transcriptCount} notes", PillState.Ok)
-        } else {
-            StatusPill("Waiting for your first note", PillState.Off)
-        }
-        if (!setup.autoRead) StatusPill("Auto-read · off", PillState.Off)
+    // Once notes exist, nothing more to say. Before the first note, a single quiet pill.
+    if (setup.transcriptCount == 0) {
+        Spacer(Modifier.height(14.dp))
+        StatusPill("Waiting for your first note", PillState.Off)
     }
 }
 
@@ -441,17 +447,34 @@ private fun MissingRow(label: String, consequence: String, satisfied: Boolean, o
 
 // ---- Precision listening: a quiet secondary control ------------------------------------------
 
+/**
+ * Three faces: a one-line "Want more precision?" hook (arrow → the explanation sheet) until the
+ * intro is dismissed; then an inline Start; and while a session runs, a Live + Stop row.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PrecisionRow(setup: SetupStatus, actions: SetupActions) {
+private fun PrecisionRow(setup: SetupStatus, actions: SetupActions, onOpenInfo: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val hookOnly = !setup.sessionActive && !setup.precisionExplained
+    // The whole row is the tap target: hook → open the sheet, explained → Start, live → Stop.
+    // Long-press (once past the hook) always reopens the explanation sheet.
+    val onRowClick: () -> Unit = when {
+        setup.sessionActive -> actions.stopSession
+        setup.precisionExplained -> actions.startSession
+        else -> onOpenInfo
+    }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .border(
-                BorderStroke(Dimens.hairline, MaterialTheme.colorScheme.outlineVariant),
-                MaterialTheme.shapes.large,
+            .clip(MaterialTheme.shapes.large) // clip BEFORE clickable so the ripple follows the corners
+            .combinedClickable(
+                onLongClickLabel = if (hookOnly) null else "About precision listening",
+                onLongClick = if (hookOnly) null else onOpenInfo,
+                onClick = onRowClick,
             ),
         shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        color = cs.surfaceContainerLow,
+        border = BorderStroke(Dimens.hairline, cs.outlineVariant),
     ) {
         Row(
             Modifier
@@ -459,31 +482,124 @@ private fun PrecisionRow(setup: SetupStatus, actions: SetupActions) {
                 .padding(horizontal = Dimens.cardPad, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                TacitIcons.ScreenShare, contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(22.dp),
-            )
+            Icon(TacitIcons.Sparkle, contentDescription = null, tint = cs.primary, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "Precision listening",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    if (setup.sessionActive) "Live — hearing notes directly. Cleaner audio, surer matches."
-                    else "Cleaner audio while a note plays. One consent per session.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            when {
+                setup.sessionActive -> {
+                    Column(Modifier.weight(1f)) {
+                        Text("Precision listening", style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
+                        Text("Live. Hearing the note directly.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text("Stop", style = MaterialTheme.typography.labelLarge, color = cs.primary)
+                }
+                setup.precisionExplained -> {
+                    Column(Modifier.weight(1f)) {
+                        Text("Precision listening", style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
+                        Text("Cleaner audio while a note plays.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text("Start", style = MaterialTheme.typography.labelLarge, color = cs.primary)
+                }
+                else -> {
+                    Text(
+                        "Want more precision?",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = cs.onSurface,
+                    )
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
+                        tint = cs.onSurfaceVariant,
+                    )
+                }
             }
-            Spacer(Modifier.width(8.dp))
-            if (setup.sessionActive) {
-                GhostButton("Stop", actions.stopSession)
-            } else {
-                GhostButton("Start", actions.startSession)
+        }
+    }
+}
+
+/**
+ * Bottom sheet that explains precision listening. Shows a "Don't show again" dismissal only the
+ * first time ([showDontShowAgain]); when reopened later via long-press it is just Start.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PrecisionSheet(
+    showDontShowAgain: Boolean,
+    onStart: () -> Unit,
+    onDontShowAgain: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = cs.surfaceContainerLow,
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Dimens.screenPad)
+                .navigationBarsPadding()
+                .padding(bottom = 16.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(TacitIcons.Sparkle, contentDescription = null, tint = cs.primary, modifier = Modifier.size(26.dp))
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text("Precision listening", style = MaterialTheme.typography.headlineSmall, color = cs.onSurface)
+                    Text(
+                        "Cleaner transcripts while a note plays.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = cs.onSurfaceVariant,
+                    )
+                }
             }
+            Spacer(Modifier.height(20.dp))
+            PrecisionBullet(
+                TacitIcons.Wave, "Cleaner audio",
+                "TACIT hears the note directly instead of through the mic, so it catches every word.",
+            )
+            PrecisionBullet(
+                TacitIcons.ScreenShare, "One consent per session",
+                "Android asks to share your screen once. It lasts until you stop it or restart your phone.",
+            )
+            PrecisionBullet(
+                TacitIcons.Lock, "Stays private",
+                "The captured audio is used only to read the note, never stored.",
+            )
+            Spacer(Modifier.height(22.dp))
+            TacitButton("Start", onStart, Modifier.fillMaxWidth())
+            if (showDontShowAgain) {
+                Spacer(Modifier.height(4.dp))
+                GhostButton("Don't show again", onDontShowAgain, Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrecisionBullet(icon: ImageVector, title: String, body: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 9.dp)
+    ) {
+        Box(
+            Modifier
+                .size(40.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+            Spacer(Modifier.height(2.dp))
+            Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

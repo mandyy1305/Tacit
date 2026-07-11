@@ -466,4 +466,52 @@ object TacitIcons {
             }
         }.build()
     }
+
+    /** Four-point sparkle (filled) — the Precision Listening / "enhanced" mark. */
+    val Sparkle: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "tacit.sparkle", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(fill = SolidColor(Color.Black), pathFillType = PathFillType.NonZero) {
+                moveTo(12f, 2.5f)
+                curveTo(12.7f, 9f, 15f, 11.3f, 21.5f, 12f)
+                curveTo(15f, 12.7f, 12.7f, 15f, 12f, 21.5f)
+                curveTo(11.3f, 15f, 9f, 12.7f, 2.5f, 12f)
+                curveTo(9f, 11.3f, 11.3f, 9f, 12f, 2.5f)
+                close()
+            }
+        }.build()
+    }
+
+    /** Padlock (outline) — the "stays private" bullet. */
+    val Lock: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "tacit.lock", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.6f,
+                strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                // Body
+                moveTo(7f, 10.5f)
+                lineTo(17f, 10.5f)
+                curveTo(17.83f, 10.5f, 18.5f, 11.17f, 18.5f, 12f)
+                lineTo(18.5f, 18.5f)
+                curveTo(18.5f, 19.33f, 17.83f, 20f, 17f, 20f)
+                lineTo(7f, 20f)
+                curveTo(6.17f, 20f, 5.5f, 19.33f, 5.5f, 18.5f)
+                lineTo(5.5f, 12f)
+                curveTo(5.5f, 11.17f, 6.17f, 10.5f, 7f, 10.5f)
+                close()
+                // Shackle
+                moveTo(8f, 10.5f)
+                lineTo(8f, 8f)
+                curveTo(8f, 5.79f, 9.79f, 4f, 12f, 4f)
+                curveTo(14.21f, 4f, 16f, 5.79f, 16f, 8f)
+                lineTo(16f, 10.5f)
+            }
+        }.build()
+    }
 }
