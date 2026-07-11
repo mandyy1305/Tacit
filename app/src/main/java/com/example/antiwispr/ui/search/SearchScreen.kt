@@ -51,11 +51,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import com.example.antiwispr.SearchEngine
-import com.example.antiwispr.SearchFilters
-import com.example.antiwispr.SearchHit
-import com.example.antiwispr.StoredTranscript
-import com.example.antiwispr.Transcripts
+import com.example.antiwispr.search.SearchEngine
+import com.example.antiwispr.search.SearchFilters
+import com.example.antiwispr.search.SearchHit
+import com.example.antiwispr.data.StoredTranscript
+import com.example.antiwispr.data.Transcripts
 import com.example.antiwispr.ui.components.OptionPickerSheet
 import com.example.antiwispr.ui.components.TranscriptCard
 import com.example.antiwispr.ui.theme.Dimens

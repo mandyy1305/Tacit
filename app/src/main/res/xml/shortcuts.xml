@@ -9,7 +9,7 @@
         <intent
             android:action="android.intent.action.VIEW"
             android:targetPackage="com.example.antiwispr"
-            android:targetClass="com.example.antiwispr.MainActivity">
+            android:targetClass="com.example.antiwispr.app.MainActivity">
             <extra android:name="tacit.dest" android:value="search" />
         </intent>
     </shortcut>
@@ -22,7 +22,7 @@
         <intent
             android:action="android.intent.action.VIEW"
             android:targetPackage="com.example.antiwispr"
-            android:targetClass="com.example.antiwispr.MainActivity">
+            android:targetClass="com.example.antiwispr.app.MainActivity">
             <extra android:name="tacit.dest" android:value="ask" />
         </intent>
     </shortcut>
@@ -35,7 +35,7 @@
         <intent
             android:action="android.intent.action.VIEW"
             android:targetPackage="com.example.antiwispr"
-            android:targetClass="com.example.antiwispr.MainActivity">
+            android:targetClass="com.example.antiwispr.app.MainActivity">
             <extra android:name="tacit.dest" android:value="library" />
         </intent>
     </shortcut>

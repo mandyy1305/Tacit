@@ -1,8 +1,8 @@
 package com.example.antiwispr.cloud
 
-import com.example.antiwispr.AppLog
-import com.example.antiwispr.Transcripts
-import com.example.antiwispr.WhatsAppAccessibilityService
+import com.example.antiwispr.core.AppLog
+import com.example.antiwispr.data.Transcripts
+import com.example.antiwispr.pipeline.WhatsAppAccessibilityService
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 

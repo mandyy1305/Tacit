@@ -17,7 +17,7 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
-import com.example.antiwispr.AppLog
+import com.example.antiwispr.core.AppLog
 import kotlin.math.roundToInt
 
 /**

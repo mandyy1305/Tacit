@@ -27,7 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.antiwispr.StoredTranscript
+import com.example.antiwispr.data.StoredTranscript
 
 /**
  * One transcript in a list — kept compact so ~5 fit a screen. Header: the sender (accent) with a

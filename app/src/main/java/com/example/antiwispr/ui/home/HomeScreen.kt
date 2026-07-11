@@ -73,7 +73,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.antiwispr.StoredTranscript
+import com.example.antiwispr.data.StoredTranscript
 import com.example.antiwispr.ui.SetupActions
 import com.example.antiwispr.ui.SetupHealth
 import com.example.antiwispr.ui.SetupStatus

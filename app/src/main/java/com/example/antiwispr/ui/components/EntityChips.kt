@@ -34,8 +34,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.antiwispr.ActionEntity
-import com.example.antiwispr.EntityKind
+import com.example.antiwispr.summarize.ActionEntity
+import com.example.antiwispr.summarize.EntityKind
 import kotlinx.coroutines.delay
 
 /**

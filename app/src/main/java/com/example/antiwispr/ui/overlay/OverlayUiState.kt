@@ -1,7 +1,7 @@
 package com.example.antiwispr.ui.overlay
 
-import com.example.antiwispr.CandidateFile
-import com.example.antiwispr.VoiceNotes
+import com.example.antiwispr.match.CandidateFile
+import com.example.antiwispr.data.VoiceNotes
 import com.example.antiwispr.ui.components.durationLabel
 import com.example.antiwispr.ui.components.waDateLabel
 

@@ -82,9 +82,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.antiwispr.ActionEntity
-import com.example.antiwispr.EntityExtractor
-import com.example.antiwispr.Toggles
+import com.example.antiwispr.summarize.ActionEntity
+import com.example.antiwispr.summarize.EntityExtractor
+import com.example.antiwispr.core.Toggles
 import com.example.antiwispr.ui.components.TacitIcons
 import com.example.antiwispr.ui.theme.Inter
 import com.example.antiwispr.ui.theme.TacitTheme
@@ -857,7 +857,7 @@ private fun SummaryPane(state: OverlayUiState, onEntityTap: (ActionEntity) -> Un
                     )
                 } else {
                     val context = LocalContext.current
-                    val parts = remember(raw) { com.example.antiwispr.parseSummary(raw) }
+                    val parts = remember(raw) { com.example.antiwispr.summarize.parseSummary(raw) }
                     val entities by produceState(emptyList<ActionEntity>(), raw) {
                         value = withContext(Dispatchers.IO) {
                             EntityExtractor.extract(context, parts, cap = EntityExtractor.OVERLAY_CAP)

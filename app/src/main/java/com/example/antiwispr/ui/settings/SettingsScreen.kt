@@ -50,9 +50,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.antiwispr.BackfillTranscriber
+import com.example.antiwispr.transcribe.BackfillTranscriber
 import com.example.antiwispr.BuildConfig
-import com.example.antiwispr.Toggles
+import com.example.antiwispr.core.Toggles
 import com.example.antiwispr.cloud.AskLanguage
 import com.example.antiwispr.cloud.CloudAuth
 import com.example.antiwispr.cloud.CloudSttLanguage

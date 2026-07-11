@@ -2,7 +2,7 @@ package com.example.antiwispr.ui.components
 
 import android.text.format.DateUtils
 import androidx.compose.ui.text.AnnotatedString
-import com.example.antiwispr.SearchEngine
+import com.example.antiwispr.search.SearchEngine
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight

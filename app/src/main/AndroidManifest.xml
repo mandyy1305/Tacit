@@ -41,7 +41,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
 
     <application
-        android:name=".TacitApp"
+        android:name=".app.TacitApp"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:enableOnBackInvokedCallback="true"
@@ -52,7 +52,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Tacit.Starting">
         <activity
-            android:name=".MainActivity"
+            android:name=".app.MainActivity"
             android:exported="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -68,7 +68,7 @@
         <!-- Invisible trampoline so the overlay's "Share screen" button can request MediaProjection
              consent (a service can't startActivityForResult). Translucent so nothing flashes. -->
         <activity
-            android:name=".ProjectionRequestActivity"
+            android:name=".audio.ProjectionRequestActivity"
             android:exported="false"
             android:excludeFromRecents="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
@@ -77,13 +77,13 @@
              mediaProjection-typed foreground service. On Android 14+ the system requires the
              FGS (with this exact type) to be running BEFORE getMediaProjection() is called. -->
         <service
-            android:name=".ProjectionService"
+            android:name=".audio.ProjectionService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
         <!-- Mic-fallback capture host (foreground service, type=microphone). -->
         <service
-            android:name=".MicCaptureService"
+            android:name=".audio.MicCaptureService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
@@ -91,7 +91,7 @@
              android:permission=BIND_ACCESSIBILITY_SERVICE is what the OS requires so only the
              system can bind it; the user must still enable it manually in Settings. -->
         <service
-            android:name=".WhatsAppAccessibilityService"
+            android:name=".pipeline.WhatsAppAccessibilityService"
             android:exported="false"
             android:label="@string/accessibility_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">

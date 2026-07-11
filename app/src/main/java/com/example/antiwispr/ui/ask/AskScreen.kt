@@ -72,7 +72,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.antiwispr.StoredTranscript
+import com.example.antiwispr.data.StoredTranscript
 import com.example.antiwispr.ui.AskMessage
 import com.example.antiwispr.ui.AskRole
 import com.example.antiwispr.ui.components.InkDivider

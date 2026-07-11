@@ -54,7 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.antiwispr.Toggles
+import com.example.antiwispr.core.Toggles
 import com.example.antiwispr.ui.SetupActions
 import com.example.antiwispr.ui.SetupStatus
 import com.example.antiwispr.ui.components.GhostButton

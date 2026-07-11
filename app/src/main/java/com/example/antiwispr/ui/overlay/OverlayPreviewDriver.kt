@@ -1,9 +1,9 @@
 package com.example.antiwispr.ui.overlay
 
 import android.content.Context
-import com.example.antiwispr.AppLog
-import com.example.antiwispr.CandidateFile
-import com.example.antiwispr.OverlayController
+import com.example.antiwispr.core.AppLog
+import com.example.antiwispr.match.CandidateFile
+import com.example.antiwispr.pipeline.OverlayController
 import java.io.File
 
 /**

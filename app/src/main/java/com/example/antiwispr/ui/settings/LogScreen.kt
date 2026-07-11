@@ -39,7 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.example.antiwispr.AppLog
+import com.example.antiwispr.core.AppLog
 import com.example.antiwispr.ui.components.GhostButton
 import com.example.antiwispr.ui.theme.Dimens
 import com.example.antiwispr.ui.theme.MonoStyle

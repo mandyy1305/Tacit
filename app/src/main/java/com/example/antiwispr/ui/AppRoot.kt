@@ -56,10 +56,10 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.example.antiwispr.AppLog
-import com.example.antiwispr.ProjectionService
-import com.example.antiwispr.Toggles
-import com.example.antiwispr.Transcripts
+import com.example.antiwispr.core.AppLog
+import com.example.antiwispr.audio.ProjectionService
+import com.example.antiwispr.core.Toggles
+import com.example.antiwispr.data.Transcripts
 import com.example.antiwispr.cloud.CloudAuth
 import kotlinx.coroutines.launch
 import com.example.antiwispr.ui.ask.AskScreen

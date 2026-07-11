@@ -1,9 +1,9 @@
 package com.example.antiwispr.cloud
 
 import android.content.Context
-import com.example.antiwispr.AppLog
-import com.example.antiwispr.StoredTranscript
-import com.example.antiwispr.Transcripts
+import com.example.antiwispr.core.AppLog
+import com.example.antiwispr.data.StoredTranscript
+import com.example.antiwispr.data.Transcripts
 import java.util.concurrent.Executors
 
 /**

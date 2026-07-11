@@ -1,7 +1,7 @@
 package com.example.antiwispr.cloud
 
 import android.content.Context
-import com.example.antiwispr.AppLog
+import com.example.antiwispr.core.AppLog
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import org.json.JSONObject

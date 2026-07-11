@@ -8,10 +8,10 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import com.example.antiwispr.AppLog
-import com.example.antiwispr.MainActivity
+import com.example.antiwispr.core.AppLog
+import com.example.antiwispr.app.MainActivity
 import com.example.antiwispr.R
-import com.example.antiwispr.StoredTranscript
+import com.example.antiwispr.data.StoredTranscript
 
 /**
  * Posts a "Transcript ready" notification for a long note whose cloud transcript arrived after

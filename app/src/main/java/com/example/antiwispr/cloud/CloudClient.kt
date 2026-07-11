@@ -1,10 +1,10 @@
 package com.example.antiwispr.cloud
 
 import android.content.Context
-import com.example.antiwispr.AppLog
-import com.example.antiwispr.StoredTranscript
-import com.example.antiwispr.Transcripts
-import com.example.antiwispr.VoiceNotes
+import com.example.antiwispr.core.AppLog
+import com.example.antiwispr.data.StoredTranscript
+import com.example.antiwispr.data.Transcripts
+import com.example.antiwispr.data.VoiceNotes
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.auth.FirebaseAuth
 import okhttp3.MediaType.Companion.toMediaType
