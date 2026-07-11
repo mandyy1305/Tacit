@@ -40,7 +40,6 @@ class Indexer(private val appContext: Context) {
 
     private val indexFile = File(appContext.filesDir, "fpindex.bin")
     private val exec = Executors.newSingleThreadExecutor { r -> Thread(r, "indexer").apply { isDaemon = true } }
-    private val transcriber by lazy { TranscriberHolder.get(appContext) } // shared instance (one model in RAM)
 
     private fun key(path: String, mtime: Long, size: Long) = "$path|$mtime|$size"
 
@@ -64,11 +63,12 @@ class Indexer(private val appContext: Context) {
 
     private fun doBuild(onProgress: (String) -> Unit) {
         val persisted = IndexStore.load(indexFile)
-        val firstBuild = persisted == null // don't auto-transcribe the whole backlog on the very first build
         val byKey = HashMap<String, StoredFile>()
         persisted?.forEach { byKey[key(it.path, it.mtime, it.size)] = it }
 
-        val files = VoiceNotes.listOpusFiles()
+        // Newest first: the note a user is about to play is almost always the latest, so fingerprint
+        // recent notes before old ones (and keep the newest, not the oldest, when the cap bites).
+        val files = VoiceNotes.listOpusFiles().sortedByDescending { it.lastModified() }
         onProgress("[indexer] found ${files.size} voice notes; persisted=${persisted?.size ?: 0}.")
         if (files.size > IndexConfig.MAX_FILES) {
             AppLog.w("[indexer] ${files.size} files exceeds cap ${IndexConfig.MAX_FILES}; indexing first ${IndexConfig.MAX_FILES}.")
@@ -80,6 +80,13 @@ class Indexer(private val appContext: Context) {
         val result = ArrayList<StoredFile>(files.size)
         var decoded = 0
         var reused = 0
+        // First build (no live index yet): publish growing partial snapshots as we fingerprint
+        // newest-first, so recent notes become matchable before the whole backlog finishes. Later
+        // builds already have a live index and just replace it atomically at the end (never shrink
+        // it mid-rebuild). Milestones grow ~2.5x so the newest go live fast without re-sorting the
+        // whole index on every file.
+        val incremental = snapshot == null
+        var nextPublish = 12
         for ((i, f) in files.withIndex()) {
             if (result.size >= IndexConfig.MAX_FILES) break
             progressDone = minOf(i + 1, progressTotal)
@@ -99,18 +106,13 @@ class Indexer(private val appContext: Context) {
                 result.add(StoredFile(f.absolutePath, f.lastModified(), f.length(), -1.0, f.name, hashesInt, fp.times))
                 decoded++
                 if (decoded % 20 == 0) onProgress("[indexer] fingerprinting ${i + 1}/${files.size} (new=$decoded reused=$reused)…")
-
-                // New notes only: auto-transcribe genuinely-new arrivals (NOT the first-ever backlog),
-                // if the model is ready and it isn't already cached. Old notes stay on-demand.
-                if (!firstBuild && WhisperModel.isReady(appContext) && Transcripts.get(appContext).find(f) == null) {
-                    try {
-                        val text = transcriber.transcribe(f)
-                        if (!text.startsWith("[")) {
-                            Transcripts.get(appContext).put(f, text, source = "local")
-                            onProgress("[indexer] auto-transcribed new note ${f.name}.")
-                        }
-                    } catch (e: Exception) { AppLog.w("[indexer] auto-transcribe failed ${f.name}: ${e.message}") }
-                }
+                // No auto-transcription: fingerprinting only makes a note matchable. A note is
+                // transcribed solely when the user plays it (overlay match) or via an explicit Catch up.
+            }
+            if (incremental && decoded > 0 && result.size >= nextPublish) {
+                snapshot = buildSnapshot(result) // publish the newest-so-far; matcher can use it now
+                onProgress("[indexer] partial index live — ${result.size} newest notes matchable…")
+                nextPublish = nextPublish * 5 / 2
             }
         }
         // Nothing new/removed and we already have a live snapshot? Skip the (3.7M-entry) re-sort +
