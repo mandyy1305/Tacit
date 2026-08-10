@@ -6,6 +6,7 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
@@ -30,6 +31,7 @@ import com.example.antiwispr.summarize.LlmModel
 import com.example.antiwispr.audio.ProjectionService
 import com.example.antiwispr.search.SearchEngine
 import com.example.antiwispr.search.SearchFilters
+import com.example.antiwispr.data.SharedAudio
 import com.example.antiwispr.data.StoredTranscript
 import com.example.antiwispr.summarize.Summarizer
 import com.example.antiwispr.search.parseAskAnswer
@@ -38,6 +40,7 @@ import com.example.antiwispr.transcribe.TranscribeRouter
 import com.example.antiwispr.data.Transcripts
 import com.example.antiwispr.match.VoiceNoteWatcher
 import com.example.antiwispr.data.VoiceNotes
+import com.example.antiwispr.pipeline.ChatContext
 import com.example.antiwispr.pipeline.WhatsAppAccessibilityService
 import com.example.antiwispr.transcribe.WhisperModel
 import com.example.antiwispr.cloud.AskLanguage
@@ -132,6 +135,27 @@ data class SetupStatus(
 /** The five macro states of readiness (doc 01 §0). Home renders exactly one. */
 enum class SetupHealth { OFF, NEEDS_SETUP, ATTENTION, GETTING_READY, READY }
 
+/** Lifecycle of one shared-audio import (ACTION_SEND), rendered by ShareImportScreen. */
+sealed interface ShareImportState {
+    data object Idle : ShareImportState
+    data object Copying : ShareImportState
+
+    /** Copied, but nothing can transcribe yet — parked on the engine fork until one exists. */
+    data class AwaitingEngine(val file: File) : ShareImportState
+    data class Transcribing(val name: String) : ShareImportState
+
+    /** A long note went to the cloud's async batch flow; the result arrives via sync + push
+     *  and the VM is watching the store for it. The user is free to leave meanwhile. */
+    data class Processing(val name: String) : ShareImportState
+
+    /** [file] is null when the copy itself failed (nothing to retry against). */
+    data class Failed(val file: File?, val message: String) : ShareImportState
+    data class Done(val transcript: StoredTranscript) : ShareImportState
+}
+
+/** chatName stamped on shared-in notes; the reader shows it as the title. */
+private const val SHARED_CHAT_NAME = "Shared audio"
+
 /** How the Library sorts: by the note's on-disk file date, or when TACIT transcribed it. Held in
  *  the ViewModel so it survives tab switches and so Home's "View all" can set it. */
 enum class LibrarySortField(val label: String) { FileDate("Date"), TranscribedTime("Transcribed Time") }
@@ -210,6 +234,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Set by MainActivity from a launcher shortcut (search / ask / library); AppRoot navigates. */
     var pendingDest by mutableStateOf<String?>(null)
+
+    /** Set by MainActivity when another app shares an audio file (ACTION_SEND); AppRoot opens
+     *  the import screen and starts the copy immediately (the read grant is activity-scoped). */
+    var pendingSharedAudio by mutableStateOf<Uri?>(null)
 
     init {
         AppLog.i("=== TACIT — every voice note, read ===")
@@ -495,6 +523,117 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---- Shared-audio import (ACTION_SEND → ShareImportScreen) --------------------------------
+
+    var shareImport by mutableStateOf<ShareImportState>(ShareImportState.Idle)
+        private set
+
+    /** The chat WhatsApp had on screen when this share arrived (see [ChatContext]) — captured
+     *  at import time because engine setup can delay the actual transcription by minutes. */
+    private var shareChatHint: String? = null
+
+    /** Copy the shared stream into private storage, then transcribe — or park on the engine
+     *  fork when nothing can transcribe yet. Copy-first: the URI grant dies with the sender's
+     *  intent, while engine setup can take minutes. */
+    fun importSharedAudio(uri: Uri) {
+        if (shareImport is ShareImportState.Copying || shareImport is ShareImportState.Transcribing) {
+            AppLog.i("[share] import already running, ignoring new share."); return
+        }
+        val ctx = getApplication<Application>().applicationContext
+        shareChatHint = ChatContext.recent()
+        shareImport = ShareImportState.Copying
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { SharedAudio.materialize(ctx, uri) }
+            when (result) {
+                is SharedAudio.Result.Fail -> shareImport = ShareImportState.Failed(null, result.message)
+                is SharedAudio.Result.Ok ->
+                    if (_setup.value.engineReady) transcribeShared(result.file)
+                    else shareImport = ShareImportState.AwaitingEngine(result.file)
+            }
+        }
+    }
+
+    /** Re-runs the import: from AwaitingEngine once engineReady flips true, or from Failed via
+     *  the screen's "Try again". No-op unless an engine exists (the fork stays on screen). */
+    fun resumeShareImport() {
+        val file = when (val s = shareImport) {
+            is ShareImportState.AwaitingEngine -> s.file
+            is ShareImportState.Failed -> s.file ?: return
+            else -> return
+        }
+        if (!_setup.value.engineReady) return
+        transcribeShared(file)
+    }
+
+    fun dismissShareImport() { shareImport = ShareImportState.Idle }
+
+    private fun transcribeShared(file: File) {
+        val ctx = getApplication<Application>().applicationContext
+        // Sender attribution, same data the play-tap flow gets from the a11y service: a
+        // WhatsApp-named note shared moments after its chat was on screen takes that chat's
+        // title. An unknown WhatsApp note stays blank (a later play-tap fills the real name;
+        // put() never downgrades); only non-WhatsApp files get the neutral label.
+        val isWaNote = VoiceNotes.parseWhatsAppName(file.name) != null
+        val nameHint = if (isWaNote) shareChatHint else null
+        val chatName = nameHint ?: SHARED_CHAT_NAME.takeUnless { isWaNote }
+        shareImport = ShareImportState.Transcribing(file.name)
+        viewModelScope.launch {
+            val (text, rec) = withContext(Dispatchers.IO) {
+                val text = TranscribeRouter.transcribe(ctx, file, chatName = chatName)
+                var rec = if (text.startsWith("[")) null else Transcripts.get(ctx).entry(file)
+                // A cache hit skips the router's put(): upgrade a blank or placeholder name
+                // in place when we know the chat (never overwrite a real one).
+                if (rec != null && nameHint != null &&
+                    (rec.chatName.isEmpty() || rec.chatName == SHARED_CHAT_NAME)) {
+                    Transcripts.get(ctx).put(file, rec.text, nameHint)
+                    rec = Transcripts.get(ctx).entry(file)
+                }
+                text to rec
+            }
+            when {
+                text == TranscribeRouter.PROCESSING -> awaitBatchResult(file)
+                text.startsWith("[") -> {
+                    AppLog.w("[share] ${file.name} failed: $text")
+                    shareImport = ShareImportState.Failed(file, friendlyShareError(text))
+                }
+                else -> {
+                    refresh()
+                    shareImport = if (rec != null) ShareImportState.Done(rec)
+                    else ShareImportState.Failed(file, "TACIT couldn't save this note. Try again.")
+                }
+            }
+        }
+    }
+
+    /** A long note is transcribing in the cloud: watch the store until the batch result lands
+     *  (the FCM push triggers the sync that merges it; the periodic pull below is the backup),
+     *  then open the reader. Stops when the user leaves — the "transcript ready" notification
+     *  covers them from there. */
+    private fun awaitBatchResult(file: File) {
+        val ctx = getApplication<Application>().applicationContext
+        shareImport = ShareImportState.Processing(file.name)
+        viewModelScope.launch {
+            repeat(200) { i -> // ~10 min, then the screen's guidance ("you'll get a notification") stands
+                delay(3_000)
+                if (shareImport !is ShareImportState.Processing) return@launch // user left or a new share started
+                Transcripts.get(ctx).entry(file)?.let {
+                    refresh()
+                    shareImport = ShareImportState.Done(it)
+                    return@launch
+                }
+                if (i % 5 == 4) SyncEngine.requestSync(ctx) // every 15 s, in case the push doesn't arrive
+            }
+        }
+    }
+
+    /** Product-language message for a failed shared-audio transcription (the router's "[...]"
+     *  strings name engines and exceptions; the UI never does). */
+    private fun friendlyShareError(raw: String): String = when {
+        Regex("timeout|network|connect|http|unreachable", RegexOption.IGNORE_CASE).containsMatchIn(raw) ->
+            "TACIT couldn't reach the cloud. Check your connection and try again."
+        else -> "TACIT couldn't read this audio. Try again."
+    }
+
     /** Backfill: transcribe the untranscribed notes of the last [days] days (searchable history). */
     fun startBackfill(days: Int) {
         val ctx = getApplication<Application>().applicationContext
@@ -513,6 +652,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         Transcripts.get(ctx).remove(t.key)
         SyncEngine.queueDeletion(ctx, t.key) // tombstone so the cloud copy dies too
         dropStaleChainGists(t) // any burst gist built from this note is stale now
+        deleteOwnedAudio(t)
         if (selectedTranscript?.key == t.key) selectedTranscript = null
         refresh()
     }
@@ -546,8 +686,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun commitPendingDeletes() {
         if (pendingDeletes.isEmpty()) return
         val ctx = getApplication<Application>().applicationContext
-        pendingDeletes.forEach { SyncEngine.queueDeletion(ctx, it.key) }
+        pendingDeletes.forEach { SyncEngine.queueDeletion(ctx, it.key); deleteOwnedAudio(it) }
         pendingDeletes = emptyList()
+    }
+
+    /** Shared-in copies live in TACIT's own shared/ folder and die with their record — only
+     *  after the undo window, so Undo can still restore playback. WhatsApp originals are never
+     *  touched. */
+    private fun deleteOwnedAudio(t: StoredTranscript) {
+        val ctx = getApplication<Application>().applicationContext
+        if (SharedAudio.owns(ctx, t.path)) File(t.path).delete()
     }
 
     override fun onCleared() {

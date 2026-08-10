@@ -162,18 +162,37 @@ object CloudClient {
     }
 
     /** POST /v1/transcribe — Sarvam via the server; null → caller falls back to local. */
-    fun transcribe(ctx: Context, file: File): String? {
-        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("file", file.name, file.asRequestBody("audio/ogg".toMediaType()))
-            .addFormDataPart("mode", CloudSttMode.fromWire(CloudPrefs.sttMode(ctx)).wire)
-            .addFormDataPart("language_code", CloudSttLanguage.fromWire(CloudPrefs.sttLanguage(ctx)).wire)
-            .build()
-        val req = request(ctx, "/v1/transcribe")?.post(body)?.build() ?: return null
+    /** Outcome of a synchronous transcription attempt. [Processing] = the server accepted the
+     *  note as an async batch job (it exceeded the synchronous cap); there is no text yet —
+     *  the transcript arrives later via sync + an FCM push. */
+    sealed interface SttResult {
+        data class Text(val text: String) : SttResult
+        data object Processing : SttResult
+    }
+
+    /**
+     * POST /v1/transcribe — synchronous text for short notes. The server transparently
+     * escalates a note Sarvam rejects as too long (>30s) to the async batch flow and answers
+     * 202, so the note's identity fields always travel along: without them an escalated job
+     * couldn't write the finished record back to this account's store. Null = failure
+     * (callers fall back to the local engine).
+     */
+    fun transcribe(ctx: Context, file: File, chatName: String? = null): SttResult? {
+        val req = request(ctx, "/v1/transcribe")?.post(noteBody(ctx, file, chatName))?.build() ?: return null
         return try {
             http.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) { AppLog.w("[cloud] transcribe ${resp.code}"); return null }
-                val text = JSONObject(resp.body!!.string()).optString("text").trim()
-                text.ifEmpty { null }
+                when {
+                    resp.code == 202 -> {
+                        AppLog.i("[cloud] ${file.name} accepted as a batch job; transcript arrives via push.")
+                        SttResult.Processing
+                    }
+                    !resp.isSuccessful -> { AppLog.w("[cloud] transcribe ${resp.code}"); null }
+                    else -> {
+                        val text = JSONObject(resp.body!!.string()).optString("text").trim()
+                        if (text.isEmpty()) { AppLog.w("[cloud] transcribe returned no text for ${file.name}."); null }
+                        else SttResult.Text(text)
+                    }
+                }
             }
         } catch (e: Exception) {
             AppLog.w("[cloud] transcribe failed: ${e.detail()}"); null
@@ -181,26 +200,12 @@ object CloudClient {
     }
 
     /**
-     * POST /v1/transcribe for a LONG note (>30s): starts an asynchronous Sarvam batch
+     * POST /v1/transcribe for a KNOWN-long note (>30s): starts an asynchronous Sarvam batch
      * job and returns true if the server accepted it (202). The transcript is NOT
-     * returned here — it arrives later via sync + an FCM push. The note identity travels
-     * along so the server can write the finished record back to this account's store.
+     * returned here — it arrives later via sync + an FCM push.
      */
     fun startBatch(ctx: Context, file: File, durationSec: Double, chatName: String?): Boolean {
-        val p = VoiceNotes.parseWhatsAppName(file.name)
-        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("file", file.name, file.asRequestBody("audio/ogg".toMediaType()))
-            .addFormDataPart("mode", CloudSttMode.fromWire(CloudPrefs.sttMode(ctx)).wire)
-            .addFormDataPart("language_code", CloudSttLanguage.fromWire(CloudPrefs.sttLanguage(ctx)).wire)
-            .addFormDataPart("duration_seconds", durationSec.toString())
-            .addFormDataPart("key", Transcripts.keyFor(file))
-            .addFormDataPart("path", file.absolutePath)
-            .addFormDataPart("name", file.name)
-            .addFormDataPart("wa_date", (p?.dateYmd ?: -1).toString())
-            .addFormDataPart("seq", (p?.seq ?: -1).toString())
-            .apply { if (!chatName.isNullOrBlank()) addFormDataPart("chat_name", chatName) }
-            .build()
-        val req = request(ctx, "/v1/transcribe")?.post(body)?.build() ?: return false
+        val req = request(ctx, "/v1/transcribe")?.post(noteBody(ctx, file, chatName, durationSec))?.build() ?: return false
         return try {
             http.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) { AppLog.w("[cloud] startBatch ${resp.code}"); return false }
@@ -210,6 +215,31 @@ object CloudClient {
         } catch (e: Exception) {
             AppLog.w("[cloud] startBatch failed: ${e.detail()}"); false
         }
+    }
+
+    /** Multipart body for /v1/transcribe: the audio + STT options + the note's identity (key,
+     *  path, name, date/seq, chat), so the async batch flow can attribute the finished record.
+     *  Duration (probed when the caller doesn't know it) lets the server route long notes to
+     *  the batch flow without a wasted Sarvam round trip. */
+    private fun noteBody(
+        ctx: Context,
+        file: File,
+        chatName: String?,
+        durationSec: Double = VoiceNotes.readDurationSec(file),
+    ): MultipartBody {
+        val p = VoiceNotes.parseWhatsAppName(file.name)
+        return MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("file", file.name, file.asRequestBody("audio/ogg".toMediaType()))
+            .addFormDataPart("mode", CloudSttMode.fromWire(CloudPrefs.sttMode(ctx)).wire)
+            .addFormDataPart("language_code", CloudSttLanguage.fromWire(CloudPrefs.sttLanguage(ctx)).wire)
+            .apply { if (durationSec > 0) addFormDataPart("duration_seconds", durationSec.toString()) }
+            .addFormDataPart("key", Transcripts.keyFor(file))
+            .addFormDataPart("path", file.absolutePath)
+            .addFormDataPart("name", file.name)
+            .addFormDataPart("wa_date", (p?.dateYmd ?: -1).toString())
+            .addFormDataPart("seq", (p?.seq ?: -1).toString())
+            .apply { if (!chatName.isNullOrBlank()) addFormDataPart("chat_name", chatName) }
+            .build()
     }
 
     /** POST /v1/device-token — register this device's FCM token so the server can push

@@ -17,6 +17,12 @@ import java.io.File
  */
 object TranscribeRouter {
 
+    /** Returned when the cloud accepted the note as an async batch job (it exceeded the
+     *  synchronous cap): there is no text yet — the finished transcript arrives via sync +
+     *  an FCM push. Starts with '[' so no caller ever caches it; the wording is safe to
+     *  paint on the overlay card as-is. */
+    const val PROCESSING = "[Reading this long note in the cloud. It will be ready in a moment.]"
+
     fun transcribe(context: Context, file: File, chatName: String? = null, force: Boolean = false): String {
         val ctx = context.applicationContext
         // Cache wins over current STT options: changing mode/language never re-transcribes
@@ -24,9 +30,20 @@ object TranscribeRouter {
         // note gets a fresh pass with the CURRENT settings.
         if (!force) Transcripts.get(ctx).find(file)?.let { return it }
 
-        val cloudText = if (CloudClient.ready(ctx) && CloudPrefs.cloudTranscription(ctx)) {
-            CloudClient.transcribe(ctx, file)?.also { AppLog.i("[cloud] transcribed ${file.name} via Sarvam.") }
-        } else null
+        var cloudText: String? = null
+        if (CloudClient.ready(ctx) && CloudPrefs.cloudTranscription(ctx)) {
+            when (val cloud = CloudClient.transcribe(ctx, file, chatName)) {
+                is CloudClient.SttResult.Processing ->
+                    // The job is running server-side; a local pass now would only produce a
+                    // second transcript for the batch result to overwrite.
+                    return PROCESSING
+                is CloudClient.SttResult.Text -> {
+                    AppLog.i("[cloud] transcribed ${file.name} via Sarvam.")
+                    cloudText = cloud.text
+                }
+                null -> {} // cloud failed (already logged) — fall through to local
+            }
+        }
 
         val transcript = cloudText ?: try {
             TranscriberHolder.get(ctx).transcribe(file)

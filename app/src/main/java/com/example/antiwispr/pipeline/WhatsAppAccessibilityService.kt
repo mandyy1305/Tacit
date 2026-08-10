@@ -103,8 +103,9 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         event ?: return
         try {
             when (event.eventType) {
-                AccessibilityEvent.TYPE_VIEW_CLICKED -> handleClick(event)
-                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> { /* not needed anymore */ }
+                AccessibilityEvent.TYPE_VIEW_CLICKED -> { stampChatContext(); handleClick(event) }
+                AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> stampNoteContext(event)
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> stampChatContext()
                 else -> {}
             }
         } catch (e: Exception) {
@@ -276,18 +277,56 @@ class WhatsAppAccessibilityService : AccessibilityService() {
 
     /** Best-effort chat title from the conversation screen (for sender attribution).
      *  If WhatsApp renames the id, we just lose the label — never the pipeline. */
-    private fun currentChatTitle(): String? = try {
+    private fun currentChatTitle(quiet: Boolean = false): String? = try {
         val root = rootInActiveWindow
         val direct = root
             ?.findAccessibilityNodeInfosByViewId("com.whatsapp:id/conversation_contact_name")
             ?.firstOrNull()?.text?.toString()?.trim()
         if (direct.isNullOrEmpty()) {
-            AppLog.i("[a11y] chat title not found (id may have changed — check a diagnostic dump).")
+            if (!quiet) AppLog.i("[a11y] chat title not found (id may have changed — check a diagnostic dump).")
             null
         } else direct
     } catch (e: Exception) {
-        AppLog.w("[a11y] chat title read failed (non-fatal): ${e.message}")
+        if (!quiet) AppLog.w("[a11y] chat title read failed (non-fatal): ${e.message}")
         null
+    }
+
+    // ---- last-seen chat / note (share-import attribution) --------------------------------
+
+    /** Keep [ChatContext]'s weak tier fresh so a note shared out of WhatsApp can at least be
+     *  attributed to the chat the user was just looking at. Window-content events fire
+     *  constantly while a chat is open; the throttle keeps the node-tree reads cheap, and
+     *  quiet mode keeps the log usable (most windows — chat list, share sheet — simply have
+     *  no title, which is not noteworthy). */
+    private var lastChatStampMs = 0L
+    private fun stampChatContext() {
+        val now = System.currentTimeMillis()
+        if (now - lastChatStampMs < 2_000) return
+        lastChatStampMs = now
+        currentChatTitle(quiet = true)?.let { ChatContext.stampChat(it) }
+    }
+
+    /** Sharing a note starts with a LONG-PRESS on its bubble — the one moment the sender of a
+     *  soon-to-be-shared note is readable. Stamp "sender · chat" (the exact composition the
+     *  play-tap flow hands the overlay) into [ChatContext]'s strong tier. Long-presses on
+     *  non-voice rows stamp too: the sender fallbacks still resolve, and a fresher long-press
+     *  simply overwrites this one. */
+    private fun stampNoteContext(event: AccessibilityEvent) {
+        if (!Toggles.tacitEnabled) return
+        val src = event.source ?: return
+        try {
+            val title = currentChatTitle(quiet = true)
+            val sender = senderNameFor(src)
+            val label = when {
+                sender != null && title != null && !sender.equals(title, ignoreCase = true) -> "$sender · $title"
+                sender != null -> sender
+                else -> title
+            } ?: return
+            ChatContext.stampNote(label)
+            AppLog.i("[a11y] long-press context = \"$label\"")
+        } catch (e: Exception) {
+            AppLog.w("[a11y] long-press context read failed (non-fatal): ${e.message}")
+        }
     }
 
     // ---- chain run (consecutive same-sender voice notes around the played one) ----------

@@ -72,6 +72,7 @@ import com.example.antiwispr.ui.onboarding.OnboardingScreen
 import com.example.antiwispr.ui.search.SearchScreen
 import com.example.antiwispr.ui.settings.LogScreen
 import com.example.antiwispr.ui.settings.SettingsScreen
+import com.example.antiwispr.ui.share.ShareImportScreen
 import com.example.antiwispr.ui.transcript.TranscriptDetailScreen
 
 /** One-tap intents for every setup requirement; screens stay dumb. */
@@ -266,6 +267,16 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
         if (pendingDest != null) vm.pendingDest = null
     }
 
+    // Audio shared from another app (MainActivity set the URI): start the copy immediately (the
+    // read grant is only guaranteed while this task lives) and show the import screen.
+    val pendingShare = vm.pendingSharedAudio
+    LaunchedEffect(pendingShare) {
+        val uri = pendingShare ?: return@LaunchedEffect
+        vm.importSharedAudio(uri)
+        nav.navigate("shareImport") { launchSingleTop = true }
+        vm.pendingSharedAudio = null
+    }
+
     val start = remember {
         if (Toggles.onboardingDone || vm.setup.value.setupComplete) "home" else "onboarding"
     }
@@ -379,6 +390,21 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                     onOpenSettings = { nav.navigate("settings") },
                     onOpenNote = { vm.selectedTranscript = it }, // swap the reader to a linked chain note in place
                     onChainChanged = { vm.refresh() },           // detach/re-attach → refresh badges
+                )
+            }
+            composable("shareImport") {
+                ShareImportScreen(
+                    state = vm.shareImport,
+                    setup = setup,
+                    actions = actions,
+                    onDone = {
+                        vm.selectedTranscript = it
+                        vm.dismissShareImport()
+                        // Replace the spent import screen so Back from the reader skips it.
+                        nav.navigate("transcript") { popUpTo("shareImport") { inclusive = true } }
+                    },
+                    onRetry = { vm.resumeShareImport() },
+                    onClose = { vm.dismissShareImport(); nav.popBackStack() },
                 )
             }
             composable("settings") {

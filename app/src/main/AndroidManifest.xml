@@ -59,14 +59,25 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Tacit.Starting">
+        <!-- singleTask: an ACTION_SEND share must land in TACIT's own task (onNewIntent on the
+             warm instance) instead of spawning a second TACIT inside the sender's task. -->
         <activity
             android:name=".app.MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Share target: "long-press an audio → Share → TACIT" from WhatsApp or any app.
+                 application/ogg is included because some senders label opus/ogg audio that way. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="application/ogg" />
             </intent-filter>
             <meta-data
                 android:name="android.app.shortcuts"
