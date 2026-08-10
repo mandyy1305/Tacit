@@ -62,6 +62,7 @@ import com.example.antiwispr.core.Toggles
 import com.example.antiwispr.data.Transcripts
 import com.example.antiwispr.cloud.CloudAuth
 import kotlinx.coroutines.launch
+import com.example.antiwispr.ui.account.AccountScreen
 import com.example.antiwispr.ui.ask.AskScreen
 import com.example.antiwispr.ui.components.InkDivider
 import com.example.antiwispr.ui.components.TacitIcons
@@ -386,6 +387,14 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                     vm = vm,
                     onBack = { nav.popBackStack() },
                     onOpenLog = { nav.navigate("log") },
+                    onOpenAccount = { nav.navigate("account") },
+                )
+            }
+            composable("account") {
+                AccountScreen(
+                    setup = setup,
+                    vm = vm,
+                    onBack = { nav.popBackStack() },
                 )
             }
             composable("log") {

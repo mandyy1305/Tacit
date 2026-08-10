@@ -63,6 +63,12 @@ object CloudClient {
     fun accountEmail(): String? =
         if (FirebaseBootstrap.available) FirebaseAuth.getInstance().currentUser?.email else null
 
+    /** Display name from the provider (Google gives one; email accounts usually don't). */
+    fun accountName(): String? =
+        if (FirebaseBootstrap.available)
+            FirebaseAuth.getInstance().currentUser?.displayName?.takeIf { it.isNotBlank() }
+        else null
+
     fun signOut() {
         if (FirebaseBootstrap.available) FirebaseAuth.getInstance().signOut()
     }

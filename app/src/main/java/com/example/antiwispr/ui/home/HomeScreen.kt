@@ -39,14 +39,15 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -77,6 +78,7 @@ import com.example.antiwispr.data.StoredTranscript
 import com.example.antiwispr.ui.SetupActions
 import com.example.antiwispr.ui.SetupHealth
 import com.example.antiwispr.ui.SetupStatus
+import com.example.antiwispr.ui.components.EngineChooser
 import com.example.antiwispr.ui.components.GhostButton
 import com.example.antiwispr.ui.components.PillState
 import com.example.antiwispr.ui.components.ProgressCapsule
@@ -106,6 +108,7 @@ fun HomeScreen(
     onFinishSetup: () -> Unit,
 ) {
     var showPrecisionSheet by remember { mutableStateOf(false) }
+    var showEngineSheet by remember { mutableStateOf(false) }
     Scaffold(
         containerColor = Color.Transparent,
         // The bottom bar (owned by AppRoot) handles the bottom inset; take only top + sides here.
@@ -121,11 +124,13 @@ fun HomeScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(Dimens.itemGap),
         ) {
-            item(key = "header") { Header(onOpenSettings) }
+            item(key = "header") { Header(setup, onOpenSettings) }
 
-            item(key = "hero") { HeroSection(setup, actions, onFinishSetup) }
+            item(key = "hero") { HeroSection(setup, actions, onFinishSetup, onChooseEngine = { showEngineSheet = true }) }
 
-            if (setup.tacitEnabled && setup.coreGrantsOk) {
+            // No engine, no transcripts — precision would be polishing a feature that can't run yet,
+            // and its row would compete with the hero's one job (choosing an engine).
+            if (setup.tacitEnabled && setup.coreGrantsOk && setup.engineReady) {
                 item(key = "precision") {
                     PrecisionRow(setup, actions, onOpenInfo = { showPrecisionSheet = true })
                 }
@@ -160,10 +165,14 @@ fun HomeScreen(
             onDismiss = { showPrecisionSheet = false },
         )
     }
+
+    if (showEngineSheet) {
+        EngineSheet(setup, actions, onDismiss = { showEngineSheet = false })
+    }
 }
 
 @Composable
-private fun Header(onOpenSettings: () -> Unit) {
+private fun Header(setup: SetupStatus, onOpenSettings: () -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("TACIT", style = WordmarkStyle, color = MaterialTheme.colorScheme.onBackground)
@@ -173,10 +182,34 @@ private fun Header(onOpenSettings: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        IconButton(onClick = onOpenSettings) {
+        AvatarButton(setup, onOpenSettings)
+    }
+}
+
+/** The header's account presence: an initial once signed in, a quiet person glyph before.
+ *  Always opens Settings, where the account state (or the sign-in pitch) sits at the top. */
+@Composable
+private fun AvatarButton(setup: SetupStatus, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val initial = (setup.accountName ?: setup.accountEmail)
+        ?.trim()?.firstOrNull()?.uppercaseChar()
+        ?.takeIf { setup.signedIn }
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(if (initial != null) cs.primaryContainer else cs.surfaceContainerHigh)
+            .border(BorderStroke(Dimens.hairline, cs.outlineVariant), CircleShape)
+            .semantics { contentDescription = "Settings" }
+            .clickable(role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (initial != null) {
+            Text(initial.toString(), style = MaterialTheme.typography.titleMedium, color = cs.onPrimaryContainer)
+        } else {
             Icon(
-                Icons.Filled.Settings, contentDescription = "Settings",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                Icons.Filled.Person, contentDescription = null,
+                tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp),
             )
         }
     }
@@ -185,7 +218,12 @@ private fun Header(onOpenSettings: () -> Unit) {
 // ---- Hero: the medallion + the readiness state it reflects -----------------------------------
 
 @Composable
-private fun HeroSection(setup: SetupStatus, actions: SetupActions, onFinishSetup: () -> Unit) {
+private fun HeroSection(
+    setup: SetupStatus,
+    actions: SetupActions,
+    onFinishSetup: () -> Unit,
+    onChooseEngine: () -> Unit,
+) {
     val onTap: () -> Unit = {
         when (setup.health) {
             SetupHealth.OFF -> actions.turnOn()
@@ -209,7 +247,7 @@ private fun HeroSection(setup: SetupStatus, actions: SetupActions, onFinishSetup
                     SetupHealth.OFF -> OffState(actions)
                     SetupHealth.NEEDS_SETUP -> NeedsSetupState(setup, actions, onFinishSetup)
                     SetupHealth.GETTING_READY -> GettingReadyState(setup)
-                    SetupHealth.ATTENTION -> AttentionState(setup, actions)
+                    SetupHealth.ATTENTION -> AttentionState(setup, actions, onChooseEngine)
                 }
             }
         }
@@ -380,7 +418,7 @@ private fun GettingReadyState(setup: SetupStatus) {
 }
 
 @Composable
-private fun AttentionState(setup: SetupStatus, actions: SetupActions) {
+private fun AttentionState(setup: SetupStatus, actions: SetupActions, onChooseEngine: () -> Unit) {
     when {
         !setup.whatsAppInstalled -> {
             HeroTitle("WhatsApp isn't on this phone")
@@ -390,12 +428,17 @@ private fun AttentionState(setup: SetupStatus, actions: SetupActions) {
         !setup.engineReady -> {
             HeroTitle("Reading isn't set up")
             Spacer(Modifier.height(6.dp))
-            HeroBody(
-                if (setup.signedIn) "Turn on TACIT Cloud in Settings, or add the offline pack to read on this phone."
-                else "Add the offline pack so notes can be read on this phone."
-            )
-            Spacer(Modifier.height(14.dp))
-            GhostButton("Get the pack · 360 MB", actions.downloadModel)
+            // Signed in means the fork is already taken (cloud); the remedy is the Settings toggle
+            // or the pack. Undecided users get the fork itself, never a pack-only push (doc 01 W2).
+            if (setup.signedIn) {
+                HeroBody("Turn on TACIT Cloud in Settings, or add the offline pack to read on this phone.")
+                Spacer(Modifier.height(14.dp))
+                GhostButton("Get the pack · 360 MB", actions.downloadModel)
+            } else {
+                HeroBody("Choose how notes become words: TACIT Cloud, or only on this phone.")
+                Spacer(Modifier.height(14.dp))
+                TacitButton("Choose how TACIT reads", onChooseEngine, Modifier.fillMaxWidth())
+            }
         }
         else -> { // detection degraded
             HeroTitle("WhatsApp changed something")
@@ -600,6 +643,45 @@ private fun PrecisionBullet(icon: ImageVector, title: String, body: String) {
             Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
             Spacer(Modifier.height(2.dp))
             Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+// ---- Engine chooser: the fork, reopened from Home ---------------------------------------------
+
+/**
+ * Bottom sheet hosting the engine fork for users who tapped "Decide later" during onboarding
+ * (doc 01 W2: the choice becomes a Home row "Choose how TACIT reads"). Same shared chooser as
+ * onboarding, so Home never biases toward one engine. Dismissed once an action starts; the
+ * hero's GETTING_READY state carries the progress from there.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EngineSheet(setup: SetupStatus, actions: SetupActions, onDismiss: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = cs.surfaceContainerLow,
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Dimens.screenPad)
+                .navigationBarsPadding()
+                .padding(bottom = 16.dp)
+        ) {
+            Text("Choose how notes become words.", style = MaterialTheme.typography.headlineSmall, color = cs.onSurface)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Both read every note. You can switch anytime in Settings.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = cs.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(18.dp))
+            EngineChooser(setup, actions, onAction = onDismiss)
         }
     }
 }

@@ -9,21 +9,30 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -32,8 +41,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -45,8 +52,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -62,10 +71,16 @@ import com.example.antiwispr.ui.SetupStatus
 import com.example.antiwispr.ui.ToggleKey
 import com.example.antiwispr.ui.components.GhostButton
 import com.example.antiwispr.ui.components.InkDivider
+import com.example.antiwispr.ui.components.LinkRow
 import com.example.antiwispr.ui.components.OptionPickerSheet
+import com.example.antiwispr.ui.components.PickerRow
 import com.example.antiwispr.ui.components.ProgressCapsule
+import com.example.antiwispr.ui.components.RowDivider
 import com.example.antiwispr.ui.components.SectionHeader
+import com.example.antiwispr.ui.components.SettingsGroup
 import com.example.antiwispr.ui.components.TacitButton
+import com.example.antiwispr.ui.components.TacitIcons
+import com.example.antiwispr.ui.components.ToggleRow
 import com.example.antiwispr.ui.components.relativeTime
 import com.example.antiwispr.ui.overlay.OverlayPreviewDriver
 import com.example.antiwispr.ui.theme.Dimens
@@ -75,7 +90,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Product-language controls over the runtime Toggles, the on-device packs, account, privacy,
- *  and (gated) developer tools. Vendor and model names never appear here; see the copy system. */
+ *  and (gated) developer tools. Vendor and model names never appear here; see the copy system.
+ *  Layout follows the profile screens of the best consumer apps: a personalized account card
+ *  on top, then one rounded card per category with compact glyph-led rows. Account matter
+ *  lives on the Account screen (doc 05); this screen keeps only the doorway. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -83,11 +101,9 @@ fun SettingsScreen(
     vm: AppViewModel,
     onBack: () -> Unit,
     onOpenLog: () -> Unit,
+    onOpenAccount: () -> Unit,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var confirmRedownload by remember { mutableStateOf(false) }
-    var confirmRedownloadLlm by remember { mutableStateOf(false) }
     var confirmDeleteWhisper by remember { mutableStateOf(false) }
     var confirmDeleteLlm by remember { mutableStateOf(false) }
     var showFolderReport by remember { mutableStateOf(false) }
@@ -96,8 +112,10 @@ fun SettingsScreen(
     var showAskLanguageSheet by remember { mutableStateOf(false) }
     var showBackfillSheet by remember { mutableStateOf(false) }
     var showDisclosure by remember { mutableStateOf(false) }
+    var showPrivacy by remember { mutableStateOf(false) }
+    var showSignInSheet by remember { mutableStateOf(false) }
+    var showEmailSheet by remember { mutableStateOf(false) }
     var devOpen by remember { mutableStateOf(false) }
-    var signInError by remember { mutableStateOf<String?>(null) }
 
     // Developer options: always available in debug; in release only after the 7-tap unlock.
     var devUnlocked by remember { mutableStateOf(BuildConfig.DEBUG) }
@@ -129,227 +147,171 @@ fun SettingsScreen(
             }
 
             Column(Modifier.padding(horizontal = Dimens.screenPad)) {
-                Spacer(Modifier.height(16.dp))
-                // Master switch (hero row).
-                ToggleRow(
-                    if (setup.tacitEnabled) "TACIT is on." else "TACIT is off.",
-                    if (setup.tacitEnabled) "Reading voice notes when they play in WhatsApp."
-                    else "Not listening, not matching, no floating card. Your library and search still work.",
-                    checked = setup.tacitEnabled,
-                ) { vm.setTacitEnabled(it) }
+                Spacer(Modifier.height(12.dp))
 
-                // ACCOUNT (hidden entirely if the build genuinely lacks cloud configuration).
+                // The personalized anchor: who you are (or the door to becoming someone).
                 if (setup.cloudConfigured) {
-                    Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
-                    SectionHeader("Account")
-                    Spacer(Modifier.height(4.dp))
-                    if (!setup.signedIn) {
-                        Column {
-                            Text(
-                                "Sign in with Google to keep your transcripts backed up and use " +
-                                    "TACIT Cloud: sharper accuracy, 23 Indian languages, cloud summaries and Ask.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(12.dp))
-                            TacitButton("Continue with Google", onClick = {
-                                signInError = null
-                                scope.launch {
-                                    CloudAuth.signIn(context)
-                                        .onSuccess { vm.onSignedIn() }
-                                        .onFailure { signInError = it.message }
-                                }
-                            }, modifier = Modifier.fillMaxWidth())
-                            signInError?.let {
-                                Spacer(Modifier.height(8.dp))
-                                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                            }
-                        }
-                    } else {
-                        Column {
-                            Row(
-                                Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        setup.accountEmail ?: "Signed in",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                    )
-                                    Text(
-                                        when {
-                                            setup.syncing -> "Backing up…"
-                                            setup.lastSyncMs > 0 -> "Backed up ${relativeTime(setup.lastSyncMs).lowercase()}"
-                                            else -> "Not backed up yet"
-                                        },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                GhostButton("Sync now", onClick = { vm.syncNow() }, enabled = !setup.syncing)
-                                GhostButton("Sign out", onClick = { vm.signOut() })
-                            }
-                            ToggleRow(
-                                "Transcribe with TACIT Cloud",
-                                "Sharper accuracy in 23 Indian languages. Notes are sent securely, transcribed, then discarded.",
-                                checked = setup.cloudTranscription,
-                            ) { vm.setCloudTranscription(it) }
-                            AnimatedVisibility(
-                                visible = setup.cloudTranscription,
-                                enter = expandVertically() + fadeIn(),
-                                exit = shrinkVertically() + fadeOut(),
-                            ) {
-                                Column {
-                                    PickerRow("Output style", setup.sttMode.label) { showModeSheet = true }
-                                    PickerRow("Spoken language", setup.sttLanguage.label) { showLanguageSheet = true }
-                                    Text(
-                                        "Applies to TACIT Cloud transcription.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.outline,
-                                    )
-                                }
-                            }
-                            ToggleRow(
-                                "Summarize with TACIT Cloud",
-                                "Sharper briefs and action points. Also powers Ask.",
-                                checked = setup.cloudSummaries,
-                            ) { vm.setCloudSummaries(it) }
-                        }
-                    }
+                    AccountCard(
+                        setup = setup,
+                        onOpenAccount = onOpenAccount,
+                        onSignIn = { showSignInSheet = true },
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
+
+                // Master switch (hero card, doc 06 §2).
+                SettingsGroup {
+                    ToggleRow(
+                        if (setup.tacitEnabled) "TACIT is on." else "TACIT is off.",
+                        if (setup.tacitEnabled) "Reading voice notes when they play in WhatsApp."
+                        else "Not listening, not matching, no floating card. Your library and search still work.",
+                        checked = setup.tacitEnabled,
+                        icon = TacitIcons.Power,
+                    ) { vm.setTacitEnabled(it) }
                 }
 
                 // TRANSCRIPTION
-                Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
-                SectionHeader("Transcription")
-                Spacer(Modifier.height(4.dp))
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "Offline transcription",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Text(
-                            if (setup.modelReady) "On this phone · 360 MB · works without internet"
-                            else setup.modelStatus.ifBlank { "Not downloaded · 360 MB · works without internet" },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                SettingsSection("Transcription")
+                SettingsGroup {
+                    PackRow(
+                        icon = TacitIcons.Wave,
+                        title = "Offline transcription",
+                        subtitle = if (setup.modelReady) "On this phone · 360 MB"
+                        else setup.modelStatus.ifBlank { "Not downloaded · 360 MB · works without internet" },
+                        ready = setup.modelReady,
+                        busy = setup.modelDownloading,
+                        onDownload = { vm.downloadModel() },
+                        onDelete = { confirmDeleteWhisper = true },
+                    )
+                    if (setup.modelDownloading) {
+                        ProgressCapsule(setup.modelProgress, setup.modelStatus)
+                        Spacer(Modifier.height(10.dp))
                     }
-                    if (setup.modelReady) {
-                        GhostButton("Delete", onClick = { confirmDeleteWhisper = true })
-                        GhostButton("Re-download", onClick = { confirmRedownload = true }, enabled = !setup.modelDownloading)
-                    } else {
-                        GhostButton("Download", onClick = { vm.downloadModel() }, enabled = !setup.modelDownloading)
+                    if (setup.cloudConfigured && setup.signedIn) {
+                        RowDivider()
+                        ToggleRow(
+                            "Transcribe with TACIT Cloud",
+                            "Sharper accuracy in 23 Indian languages.",
+                            checked = setup.cloudTranscription,
+                            icon = TacitIcons.Cloud,
+                        ) { vm.setCloudTranscription(it) }
+                        AnimatedVisibility(
+                            visible = setup.cloudTranscription,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut(),
+                        ) {
+                            Column(Modifier.padding(start = 32.dp)) {
+                                PickerRow("Output style", setup.sttMode.label) { showModeSheet = true }
+                                PickerRow("Spoken language", setup.sttLanguage.label) { showLanguageSheet = true }
+                            }
+                        }
                     }
-                }
-                if (setup.modelDownloading) {
-                    ProgressCapsule(setup.modelProgress, setup.modelStatus)
-                    Spacer(Modifier.height(10.dp))
-                }
-                LinkRow(
-                    "Catch up on older notes",
-                    if (setup.backfillRunning) "Working through your notes…"
-                    else "Transcribe a recent period so it shows in search and your library.",
-                ) { if (!setup.backfillRunning) showBackfillSheet = true }
-                if (setup.backfillRunning) {
-                    ProgressCapsule(setup.backfillProgress, setup.backfillStatus)
-                    Spacer(Modifier.height(6.dp))
-                    GhostButton("Cancel", onClick = { vm.cancelBackfill() })
-                    Spacer(Modifier.height(10.dp))
+                    RowDivider()
+                    LinkRow(
+                        "Catch up on older notes",
+                        if (setup.backfillRunning) "Working through your notes…"
+                        else "Transcribe a recent period.",
+                        icon = TacitIcons.Calendar,
+                    ) { if (!setup.backfillRunning) showBackfillSheet = true }
+                    if (setup.backfillRunning) {
+                        ProgressCapsule(setup.backfillProgress, setup.backfillStatus)
+                        GhostButton("Cancel", onClick = { vm.cancelBackfill() })
+                        Spacer(Modifier.height(6.dp))
+                    }
                 }
 
                 // SUMMARIES
-                Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
-                SectionHeader("Summaries")
-                Spacer(Modifier.height(4.dp))
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "Offline summaries",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Text(
-                            if (setup.llmReady) "On this phone · 1.6 GB"
-                            else setup.llmStatus.ifBlank { "Not downloaded · 1.6 GB" },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                SettingsSection("Summaries")
+                SettingsGroup {
+                    PackRow(
+                        icon = TacitIcons.Summary,
+                        title = "Offline summaries",
+                        subtitle = if (setup.llmReady) "On this phone · 1.6 GB"
+                        else setup.llmStatus.ifBlank { "Not downloaded · 1.6 GB" },
+                        ready = setup.llmReady,
+                        busy = setup.llmDownloading,
+                        onDownload = { vm.downloadLlm() },
+                        onDelete = { confirmDeleteLlm = true },
+                    )
+                    if (setup.llmDownloading) {
+                        ProgressCapsule(setup.llmProgress, setup.llmStatus)
+                        Spacer(Modifier.height(10.dp))
                     }
-                    if (setup.llmReady) {
-                        GhostButton("Delete", onClick = { confirmDeleteLlm = true })
-                        GhostButton("Re-download", onClick = { confirmRedownloadLlm = true }, enabled = !setup.llmDownloading)
-                    } else {
-                        GhostButton("Download", onClick = { vm.downloadLlm() }, enabled = !setup.llmDownloading)
+                    if (setup.cloudConfigured && setup.signedIn) {
+                        RowDivider()
+                        ToggleRow(
+                            "Summarize with TACIT Cloud",
+                            "Sharper briefs and action points. Also powers Ask.",
+                            checked = setup.cloudSummaries,
+                            icon = TacitIcons.Cloud,
+                        ) { vm.setCloudSummaries(it) }
+                    }
+                    RowDivider()
+                    PickerRow("Ask answers", setup.askLanguage.label, icon = TacitIcons.Ask) {
+                        showAskLanguageSheet = true
                     }
                 }
-                if (setup.llmDownloading) {
-                    ProgressCapsule(setup.llmProgress, setup.llmStatus)
-                    Spacer(Modifier.height(10.dp))
-                }
-                PickerRow("Ask answers", setup.askLanguage.label) { showAskLanguageSheet = true }
-                Text(
-                    "Each note becomes a short brief with action points.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
-                )
 
                 // BEHAVIOUR
-                Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
-                SectionHeader("Behaviour")
-                Spacer(Modifier.height(4.dp))
-                ToggleRow(
-                    "Pause the note once identified",
-                    "Pauses WhatsApp playback so you can read instead of listen.",
-                    checked = Toggles.pauseOnMatch,
-                ) { vm.setToggle(ToggleKey.PauseOnMatch, it) }
-                ToggleRow(
-                    "Microphone fallback",
-                    "When Precision listening is off, listen through the mic. Less accurate.",
-                    checked = Toggles.micFallbackEnabled,
-                ) { vm.setToggle(ToggleKey.MicFallback, it) }
+                SettingsSection("Behaviour")
+                SettingsGroup {
+                    ToggleRow(
+                        "Pause the note once identified",
+                        "Read instead of listen.",
+                        checked = Toggles.pauseOnMatch,
+                        icon = Icons.Filled.PlayArrow,
+                    ) { vm.setToggle(ToggleKey.PauseOnMatch, it) }
+                    RowDivider()
+                    ToggleRow(
+                        "Microphone fallback",
+                        "When Precision listening is off. Less accurate.",
+                        checked = Toggles.micFallbackEnabled,
+                        icon = TacitIcons.Mic,
+                    ) { vm.setToggle(ToggleKey.MicFallback, it) }
+                }
 
                 // PRIVACY
-                Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
-                SectionHeader("Privacy")
-                Spacer(Modifier.height(4.dp))
-                LinkRow(
-                    "How TACIT reads WhatsApp",
-                    "The accessibility connection, explained.",
-                ) { showDisclosure = true }
+                SettingsSection("Privacy")
+                SettingsGroup {
+                    LinkRow(
+                        "What leaves this phone",
+                        "",
+                        icon = TacitIcons.Lock,
+                    ) { showPrivacy = true }
+                    RowDivider()
+                    LinkRow(
+                        "How TACIT reads WhatsApp",
+                        "",
+                        icon = TacitIcons.ScreenShare,
+                    ) { showDisclosure = true }
+                }
 
                 // ABOUT
-                Spacer(Modifier.height(Dimens.sectionGap - 12.dp))
-                SectionHeader("About")
-                Spacer(Modifier.height(4.dp))
-                LinkRow("Version", "1.0 (1)") {
-                    val now = System.currentTimeMillis()
-                    versionTaps = if (now - lastTapMs < 3000) versionTaps + 1 else 1
-                    lastTapMs = now
-                    if (!devUnlocked && versionTaps >= 7) {
-                        devUnlocked = true
-                        Toast.makeText(context, "Developer options unlocked.", Toast.LENGTH_SHORT).show()
+                SettingsSection("About")
+                SettingsGroup {
+                    LinkRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", icon = Icons.Filled.Info) {
+                        val now = System.currentTimeMillis()
+                        versionTaps = if (now - lastTapMs < 3000) versionTaps + 1 else 1
+                        lastTapMs = now
+                        if (!devUnlocked && versionTaps >= 7) {
+                            devUnlocked = true
+                            Toast.makeText(context, "Developer options unlocked.", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    RowDivider()
+                    LinkRow("Rate TACIT", "Takes a minute, means a lot.", icon = Icons.Filled.Star) {
+                        val pkg = context.packageName
+                        val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pkg"))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        val web = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$pkg"))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        try { context.startActivity(market) } catch (_: Exception) {
+                            try { context.startActivity(web) } catch (_: Exception) {}
+                        }
                     }
                 }
-                LinkRow("Rate TACIT", "Takes a minute, means a lot.") {
-                    val pkg = context.packageName
-                    val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pkg"))
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    val web = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$pkg"))
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    try { context.startActivity(market) } catch (_: Exception) {
-                        try { context.startActivity(web) } catch (_: Exception) {}
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
+
+                Spacer(Modifier.height(20.dp))
                 Text(
                     "TACIT · Every voice note, read.",
                     modifier = Modifier.fillMaxWidth(),
@@ -382,7 +344,7 @@ fun SettingsScreen(
                         enter = expandVertically() + fadeIn(),
                         exit = shrinkVertically() + fadeOut(),
                     ) {
-                        Column {
+                        SettingsGroup {
                             ToggleRow(
                                 "Diagnostic mode",
                                 "Dump WhatsApp's node tree on taps; show raw match details in the overlay.",
@@ -426,103 +388,25 @@ fun SettingsScreen(
         }
     }
 
-    if (confirmRedownload) {
-        AlertDialog(
-            onDismissRequest = { confirmRedownload = false },
-            title = { Text("Re-download the offline transcription pack?", style = MaterialTheme.typography.headlineSmall) },
-            text = {
-                Text(
-                    "The current files are removed and 360 MB is fetched again. " +
-                        "Transcription is unavailable until it finishes.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { confirmRedownload = false; vm.redownloadModel() }) {
-                    Text("Re-download", color = MaterialTheme.colorScheme.primary)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmRedownload = false }) {
-                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        )
-    }
-
     if (confirmDeleteWhisper) {
-        AlertDialog(
-            onDismissRequest = { confirmDeleteWhisper = false },
-            title = { Text("Delete the offline transcription pack?", style = MaterialTheme.typography.headlineSmall) },
-            text = {
-                Text(
-                    "Frees 360 MB. With Pro, transcription continues through TACIT Cloud. " +
-                        "Without it, transcription stops until you download it again.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { confirmDeleteWhisper = false; vm.deleteWhisperModel() }) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmDeleteWhisper = false }) {
-                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        PackDeleteDialog(
+            title = "Delete the offline transcription pack?",
+            body = "Frees 360 MB. With Pro, transcription continues through TACIT Cloud. " +
+                "Without it, transcription stops until you download it again.",
+            onDelete = { confirmDeleteWhisper = false; vm.deleteWhisperModel() },
+            onRedownload = { confirmDeleteWhisper = false; vm.redownloadModel() },
+            onDismiss = { confirmDeleteWhisper = false },
         )
     }
 
     if (confirmDeleteLlm) {
-        AlertDialog(
-            onDismissRequest = { confirmDeleteLlm = false },
-            title = { Text("Delete the offline summaries pack?", style = MaterialTheme.typography.headlineSmall) },
-            text = {
-                Text(
-                    "Frees 1.6 GB. With Pro, summaries continue through TACIT Cloud. " +
-                        "Without it, summaries stop until you download it again.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { confirmDeleteLlm = false; vm.deleteLlmModel() }) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmDeleteLlm = false }) {
-                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        )
-    }
-
-    if (confirmRedownloadLlm) {
-        AlertDialog(
-            onDismissRequest = { confirmRedownloadLlm = false },
-            title = { Text("Re-download the offline summaries pack?", style = MaterialTheme.typography.headlineSmall) },
-            text = {
-                Text(
-                    "The current file is removed and 1.6 GB is fetched again. " +
-                        "Summaries are unavailable until it finishes.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { confirmRedownloadLlm = false; vm.redownloadLlm() }) {
-                    Text("Re-download", color = MaterialTheme.colorScheme.primary)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmRedownloadLlm = false }) {
-                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        PackDeleteDialog(
+            title = "Delete the offline summaries pack?",
+            body = "Frees 1.6 GB. With Pro, summaries continue through TACIT Cloud. " +
+                "Without it, summaries stop until you download it again.",
+            onDelete = { confirmDeleteLlm = false; vm.deleteLlmModel() },
+            onRedownload = { confirmDeleteLlm = false; vm.redownloadLlm() },
+            onDismiss = { confirmDeleteLlm = false },
         )
     }
 
@@ -561,6 +445,64 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+
+    if (showPrivacy) {
+        ModalBottomSheet(
+            onDismissRequest = { showPrivacy = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ) {
+            Column(
+                Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = Dimens.screenPad)
+                    .padding(bottom = 32.dp)
+            ) {
+                Text(
+                    "What leaves this phone",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(12.dp))
+                PrivacyRow("Transcription (offline pack)", "Nothing leaves. Audio and words stay here.")
+                PrivacyRow(
+                    "TACIT Cloud transcription",
+                    "The voice note file is sent securely, transcribed, and discarded. The transcript is stored in your backup.",
+                )
+                PrivacyRow("Summaries and Ask (offline)", "Nothing leaves.")
+                PrivacyRow(
+                    "TACIT Cloud summaries and Ask",
+                    "The transcript text (not audio) is sent securely to generate the brief or answer.",
+                )
+                PrivacyRow(
+                    "Backup",
+                    "When signed in, transcripts sync to your account so any signed-in phone can read them.",
+                )
+                PrivacyRow(
+                    "Play detection",
+                    "TACIT reads the voice note bubble in WhatsApp on this screen only. Never uploaded.",
+                )
+                PrivacyRow(
+                    "Listening (mic or Precision)",
+                    "A few seconds of audio are matched on this phone and immediately discarded.",
+                )
+            }
+        }
+    }
+
+    if (showSignInSheet) {
+        SignInSheet(
+            vm = vm,
+            onUseEmail = { showSignInSheet = false; showEmailSheet = true },
+            onDismiss = { showSignInSheet = false },
+        )
+    }
+
+    if (showEmailSheet) {
+        EmailSignInSheet(
+            onSuccess = { vm.onSignedIn(); showEmailSheet = false },
+            onDismiss = { showEmailSheet = false },
+        )
     }
 
     if (showFolderReport) {
@@ -652,6 +594,198 @@ fun SettingsScreen(
     }
 }
 
+/** Section overline sitting between cards. */
+@Composable
+private fun SettingsSection(title: String) {
+    Spacer(Modifier.height(Dimens.sectionGap - 8.dp))
+    SectionHeader(title)
+    Spacer(Modifier.height(8.dp))
+}
+
+/**
+ * The account anchor at the top of Settings. Signed out it is the door to signing in (the
+ * buttons live in a sheet, keeping the page quiet); signed in it is the doorway to the
+ * Account screen.
+ */
+@Composable
+private fun AccountCard(setup: SetupStatus, onOpenAccount: () -> Unit, onSignIn: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    SettingsGroup {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable { if (setup.signedIn) onOpenAccount() else onSignIn() }
+                .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(if (setup.signedIn) cs.primaryContainer else cs.surfaceContainerHigh),
+                contentAlignment = Alignment.Center,
+            ) {
+                val initial = (setup.accountName ?: setup.accountEmail)
+                    ?.trim()?.firstOrNull()?.uppercaseChar()
+                    ?.takeIf { setup.signedIn }
+                if (initial != null) {
+                    Text(initial.toString(), style = MaterialTheme.typography.titleMedium, color = cs.onPrimaryContainer)
+                } else {
+                    Icon(
+                        Icons.Filled.Person, contentDescription = null,
+                        tint = cs.onSurfaceVariant, modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                if (setup.signedIn) {
+                    val email = setup.accountEmail.orEmpty()
+                    Text(
+                        setup.accountName ?: email.substringBefore('@').ifBlank { "Signed in" },
+                        style = MaterialTheme.typography.titleMedium, color = cs.onSurface,
+                    )
+                    Text(
+                        when {
+                            setup.syncing -> "Backing up…"
+                            setup.lastSyncMs > 0 -> "Backed up ${relativeTime(setup.lastSyncMs).lowercase()}"
+                            else -> "Not backed up yet"
+                        },
+                        style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+                    )
+                } else {
+                    Text("Back up your library", style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
+                    Text(
+                        "Sign in for TACIT Cloud: sharper accuracy, backup and Ask.",
+                        style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+                    )
+                }
+            }
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
+                tint = cs.outline,
+            )
+        }
+    }
+}
+
+/** The sign-in fork, off the main page so Settings stays a list, not a landing page. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SignInSheet(vm: AppViewModel, onUseEmail: () -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val cs = MaterialTheme.colorScheme
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    ModalBottomSheet(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = cs.surfaceContainerLow,
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Dimens.screenPad)
+                .navigationBarsPadding()
+                .padding(bottom = 16.dp)
+        ) {
+            Text("Back up your library.", style = MaterialTheme.typography.headlineSmall, color = cs.onSurface)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Sign in to keep transcripts safe and use TACIT Cloud: sharper accuracy, " +
+                    "23 Indian languages, cloud summaries and Ask.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = cs.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(18.dp))
+            TacitButton(
+                "Continue with Google",
+                onClick = {
+                    busy = true; error = null
+                    scope.launch {
+                        CloudAuth.signIn(context)
+                            .onSuccess { vm.onSignedIn(); onDismiss() }
+                            .onFailure { error = CloudAuth.friendlyGoogleError(it) }
+                        busy = false
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                loading = busy,
+            )
+            Spacer(Modifier.height(4.dp))
+            GhostButton(
+                "Use email instead",
+                onClick = onUseEmail,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+                enabled = !busy,
+            )
+            error?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = cs.error)
+            }
+        }
+    }
+}
+
+/** A pack-manager row: glyph, name, state line, one quiet action (doc 06 §4: re-download
+ *  moves inside the delete dialog so the ready state carries a single button). */
+@Composable
+private fun PackRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    ready: Boolean,
+    busy: Boolean,
+    onDownload: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (ready) GhostButton("Delete", onClick = onDelete)
+        else GhostButton("Download", onClick = onDownload, enabled = !busy)
+    }
+}
+
+/** Delete confirm for a pack; offers re-download in place (doc 08). */
+@Composable
+private fun PackDeleteDialog(
+    title: String,
+    body: String,
+    onDelete: () -> Unit,
+    onRedownload: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title, style = MaterialTheme.typography.headlineSmall) },
+        text = { Text(body, style = MaterialTheme.typography.bodyMedium) },
+        confirmButton = {
+            TextButton(onClick = onDelete) {
+                Text("Delete", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onRedownload) {
+                    Text("Re-download", color = MaterialTheme.colorScheme.primary)
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        },
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    )
+}
+
 @Composable
 private fun DisclosurePara(text: String) {
     Text(
@@ -660,6 +794,16 @@ private fun DisclosurePara(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(bottom = 12.dp),
     )
+}
+
+/** One feature in the "What leaves this phone" table: name, then the data-flow sentence. */
+@Composable
+private fun PrivacyRow(feature: String, sends: String) {
+    Column(Modifier.padding(bottom = 14.dp)) {
+        Text(feature, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+        Spacer(Modifier.height(2.dp))
+        Text(sends, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 }
 
 /** Server URL (developer, debug builds only) while the tacit-cloud server runs locally. */
@@ -675,71 +819,4 @@ private fun CloudUrlField(current: String, onChange: (String) -> Unit) {
         textStyle = MaterialTheme.typography.bodyMedium,
         singleLine = true,
     )
-}
-
-/** Stateless controlled toggle row: the caller owns the value, so the switch never drifts from
- *  its backing state (re-keyed on [checked]). */
-@Composable
-private fun ToggleRow(
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    onChange: (Boolean) -> Unit,
-) {
-    var local by remember(checked) { mutableStateOf(checked) }
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Switch(
-            checked = local,
-            onCheckedChange = { local = it; onChange(it) },
-            colors = SwitchDefaults.colors(
-                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-            ),
-        )
-    }
-}
-
-/** Tappable row showing the current choice; opens a picker sheet. */
-@Composable
-private fun PickerRow(title: String, value: String, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-            Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Icon(
-            Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
-            tint = MaterialTheme.colorScheme.outline,
-        )
-    }
-}
-
-@Composable
-private fun LinkRow(title: String, subtitle: String, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-            if (subtitle.isNotBlank()) {
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        Icon(
-            Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
-            tint = MaterialTheme.colorScheme.outline,
-        )
-    }
 }
